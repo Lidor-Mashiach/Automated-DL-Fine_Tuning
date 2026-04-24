@@ -1,0 +1,158 @@
+# =============================================================================
+# Transformer Encoder - Architecture Configuration
+# =============================================================================
+
+architecture_name: transformer
+
+
+parameters:
+
+  # d_model
+  # -------
+  # Embedding dimension throughout the model. Must be divisible by nhead.
+  # The system auto-fixes mismatched pairs.
+  d_model:
+    enabled: true
+    initial_value: 128
+    choices: [64, 128, 256, 512]
+
+  # nhead
+  # -----
+  # Number of attention heads. Each head attends to a different subspace.
+  nhead:
+    enabled: true
+    initial_value: 4
+    choices: [2, 4, 8]
+
+  # num_encoder_layers
+  # ------------------
+  # Depth of the encoder stack. More layers = more capacity, slower training.
+  num_encoder_layers:
+    enabled: true
+    initial_value: 3
+    range: [2, 6]
+
+  # dim_feedforward
+  # ---------------
+  # Hidden dimension of the feed-forward subnetwork within each encoder layer.
+  # Typically 2-4x d_model.
+  dim_feedforward:
+    enabled: true
+    initial_value: 512
+    choices: [256, 512, 1024, 2048]
+
+  activation:
+    enabled: true
+    initial_value: "gelu"
+    choices: ["relu", "gelu"]
+
+  embedding_dim:
+    enabled: true
+    initial_value: 128
+    choices: [64, 128, 256]
+
+
+architectures:
+
+  # positional_encoding
+  # -------------------
+  # Positional information added to token embeddings:
+  #   sinusoidal : fixed sinusoids (no parameters to learn)
+  positional_encoding:
+    enabled: true
+    initial_value: "sinusoidal"
+    choices: ["sinusoidal"]
+
+
+methods:
+
+  # dropout
+  # -------
+  # Applied after attention and feed-forward sublayers.
+  dropout:
+    enabled: true
+    initial_value: 0.1
+    range: [0.0, 0.3]
+
+  # attention_dropout
+  # -----------------
+  # Dropout applied inside the attention mechanism.
+  attention_dropout:
+    enabled: true
+    initial_value: 0.1
+    range: [0.0, 0.3]
+
+  weight_decay:
+    enabled: true
+    initial_value: 1.0e-4
+    range: [1.0e-5, 1.0e-2]
+    log: true
+
+  gradient_clipping:
+    enabled: true
+    initial_value: 1.0
+    range: [0.0, 5.0]
+
+  # lr_warmup
+  # ---------
+  # Warmup steps over which LR rises from 0 to the target value. Essential
+  # for transformer stability in early training.
+  lr_warmup:
+    enabled: true
+    initial_value: 500
+    range: [100, 2000]
+
+  # label_smoothing
+  # ---------------
+  label_smoothing:
+    enabled: true
+    initial_value: 0.1
+    range: [0.0, 0.2]
+
+  early_stopping:
+    enabled: true
+    initial_value: true
+    choices: [true, false]
+    patience: 8
+
+
+optimization:
+
+  name:
+    enabled: true
+    initial_value: "adamw"
+    choices: ["adam", "adamw"]
+
+  # learning_rate
+  # -------------
+  # Narrower range than other architectures - transformers are LR-sensitive.
+  learning_rate:
+    enabled: true
+    initial_value: 1.0e-4
+    range: [1.0e-5, 1.0e-3]
+    log: true
+
+  lr_scheduler:
+    enabled: true
+    initial_value: "cosine"
+    choices: ["cosine", "reduce_on_plateau"]
+
+
+training:
+
+  batch_size:
+    enabled: true
+    initial_value: 32
+    choices: [16, 32, 64]
+
+  epochs:
+    enabled: true
+    initial_value: 40
+
+  validation_split:
+    enabled: true
+    initial_value: 0.2
+
+  sequence_length:
+    enabled: true
+    initial_value: 128

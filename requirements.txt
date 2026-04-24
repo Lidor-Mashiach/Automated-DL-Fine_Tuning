@@ -1,0 +1,90 @@
+# =============================================================================
+#  AutoTune-NN | Requirements
+# =============================================================================
+#
+#  Python version: 3.10 or higher required.
+#  (Uses modern type hint syntax like `str | None` which requires 3.10+.)
+#
+#  Project folder map (what each directory does):
+#
+#    autotune_nn/
+#    ├── main.py                   Entry point - only top-level selections.
+#    ├── requirements.txt          This file.
+#    ├── README.md                 High-level guide.
+#    ├── FUTURE_WORK.md            Planned extensions.
+#    │
+#    ├── configs/                  All tunable settings live here.
+#    │   ├── README.md
+#    │   ├── architectures/        YAML per architecture (mlp/cnn/rnn/lstm/transformer).
+#    │   └── strategies/           YAML per search strategy (ftts/bayesian/grid).
+#    │
+#    ├── core/                     Internal engine.
+#    │   ├── run_config.py         User selections dataclass.
+#    │   ├── config_manager.py     Loads architecture YAMLs.
+#    │   ├── strategy_config.py    Loads strategy YAMLs.
+#    │   ├── device_utils.py       GPU/CPU resolution with fallback.
+#    │   ├── trainer.py            Single-trial training loop (smoothed early-stop).
+#    │   ├── smoothing.py          Moving-average utilities.
+#    │   ├── quality_scorer.py     4-component quality score.
+#    │   ├── analyzer.py           Diagnoses curves, emits prioritized actions.
+#    │   └── orchestrator.py       Main loop, stopping conditions, wiring.
+#    │
+#    ├── models/                   Model builders (all implemented in pure torch.nn).
+#    │                             No external model libraries needed.
+#    │
+#    ├── data_loaders/             Dataset loading.
+#    │   ├── local_loader.py       Data/ with 3-way Train/Val/Test split files.
+#    │   └── imported_loader.py    torchvision / sklearn datasets.
+#    │
+#    ├── search_strategies/        How hyperparameters are chosen.
+#    │   ├── ftts.py               Fine-Tuning Tree Search (default).
+#    │   ├── experiment_tree.py    Thread-safe tree + priority queue.
+#    │   ├── bayesian.py           Optuna TPE wrapper.
+#    │   └── grid.py               Exhaustive grid search.
+#    │
+#    ├── reporting/                User-facing output.
+#    │   ├── reporter.py           Cumulative report.txt writer.
+#    │   └── plotter.py            best_trial.png writer (non-blocking).
+#    │
+#    ├── Data/                     Your datasets (local mode).
+#    │   ├── Data-Set.csv          Your input file.
+#    │   ├── Train_set.csv         Auto-generated on first run.
+#    │   ├── Val_set.csv           Auto-generated on first run.
+#    │   └── Test_set.csv          Auto-generated on first run (held out).
+#    │   (Imported datasets are cached in ~/.cache/autotune_nn/ instead.)
+#    │
+#    ├── experiments/              Auto-created per run (timestamp_<arch>_<strategy>/).
+#    │                             Contains report.txt + best_trial.png.
+#    │
+#    └── slurm/                    sbatch template for HPC clusters.
+#
+# =============================================================================
+#  Python dependencies
+# =============================================================================
+#
+#  All neural network architectures (MLP, CNN, RNN, LSTM, Transformer) are
+#  implemented from scratch using torch.nn - no external model libraries.
+#  torchvision is used only for image datasets (MNIST, CIFAR, ...) and image
+#  transforms. scikit-learn is used only for tabular datasets (Iris, Wine, ...).
+#
+# =============================================================================
+
+# ---- Core: tensor ops and network building ----
+torch>=2.0              # Neural networks, optimizers, training.
+                        # All 5 architectures are built with torch.nn primitives.
+torchvision>=0.15       # Image datasets (MNIST, CIFAR...) and image transforms.
+
+# ---- Data loading and preprocessing ----
+numpy>=1.24             # Numeric arrays.
+pandas>=2.0             # CSV I/O, tabular preprocessing.
+scikit-learn>=1.3       # sklearn datasets (Iris, Wine, etc.) and utilities.
+
+# ---- Configuration ----
+PyYAML>=6.0             # Load configs/*.yaml.
+
+# ---- Plotting (non-blocking, saves PNG only) ----
+matplotlib>=3.7         # Generate best_trial.png.
+
+# ---- Hyperparameter search ----
+optuna>=3.4             # Required only for SEARCH_STRATEGY="bayesian".
+                        # FTTS and grid search work without it.

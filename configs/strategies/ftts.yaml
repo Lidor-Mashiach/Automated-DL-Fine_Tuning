@@ -1,0 +1,136 @@
+# =============================================================================
+# FTTS (Fine-Tuning Tree Search) - Strategy Configuration
+# =============================================================================
+# FTTS is the default search strategy. It builds a tree of experiments where
+# each node is a trial and each edge is an Analyzer-suggested modification
+# applied to a parent's hyperparameters.
+#
+# See configs/strategies/README.md for full documentation.
+# =============================================================================
+
+
+# =============================================================================
+# scoring - quality score configuration
+# =============================================================================
+# Every completed trial is assigned a quality_score in [0, 1] based on 4
+# components: best_metric, stability, convergence_speed, generalization_gap.
+# The priority queue ranks pending experiments by:
+#     child_score = parent.quality_score * action.priority
+# =============================================================================
+scoring:
+
+  # smoothing_window
+  # ----------------
+  # Window size (in epochs) for the moving-average smoothing applied to all
+  # metrics in the system. Smoothed values are used for:
+  #   - trial-level early stopping
+  #   - quality_score computation
+  #   - target_accuracy comparisons
+  # Larger window -> more stable but less responsive to real improvements.
+  smoothing_window: 5
+
+  # profile
+  # -------
+  # Weight preset for the quality_score components:
+  #   performance : {best:0.70, stability:0.10, speed:0.10, gap:0.10}
+  #                 Prioritize peak metric over everything else.
+  #   balanced    : {best:0.50, stability:0.20, speed:0.15, gap:0.15}
+  #                 Default - good trade-off for most tasks.
+  #   robust      : {best:0.35, stability:0.30, speed:0.15, gap:0.20}
+  #                 Prioritize stability and generalization. For production.
+  #   custom      : use `custom_weights` below instead.
+  profile: "balanced"
+
+  # custom_weights
+  # --------------
+  # Used only if profile == "custom". Weights will be auto-normalized to 1.0.
+  custom_weights: null
+  # Example:
+  #   custom_weights:
+  #     best_metric: 0.6
+  #     stability: 0.2
+  #     convergence_speed: 0.1
+  #     generalization_gap: 0.1
+
+
+# =============================================================================
+# stopping - when to stop the run
+# =============================================================================
+# All four conditions can be active at once. The run stops on the first one
+# that fires. At least one must be set (not null) - otherwise the run would
+# be infinite and the system raises an error.
+# =============================================================================
+stopping:
+
+  # max_trials
+  # ----------
+  # Upper bound on the total number of trials. null = no limit.
+  max_trials: 50
+
+  # time_limit_minutes
+  # ------------------
+  # Soft upper bound in wall-clock minutes. The run finishes the current
+  # trial and stops once this is exceeded. null = no limit.
+  time_limit_minutes: null
+
+  # target_accuracy
+  # ---------------
+  # Stop once the best trial's SMOOTHED validation metric reaches this value.
+  # For classification this is smoothed accuracy in [0, 1].
+  # For regression it is the smoothed negative RMSE (higher = better).
+  # null = no target.
+  target_accuracy: null
+
+  # convergence_patience
+  # --------------------
+  # Stop if this many consecutive trials produce no improvement in the
+  # best quality_score. null = disabled.
+  # Note: set high - FTTS often explores multiple branches between
+  # improvements. Too low = premature stop.
+  convergence_patience: 40
+
+
+# =============================================================================
+# step_control - adaptive step sizes
+# =============================================================================
+# When the Analyzer suggests "increase_lr", the current LR is multiplied by
+# a step factor. This block controls how that factor adapts based on outcomes.
+# =============================================================================
+step_control:
+
+  # successful_step_boost
+  # ---------------------
+  # Step multiplier grows by this factor when an action yielded improvement.
+  # "If going this direction worked, try more of it next time."
+  successful_step_boost: 1.5
+
+  # failed_step_shrink
+  # ------------------
+  # Step multiplier shrinks by this factor when an action didn't improve.
+  # "If that was too big, try a smaller step."
+  failed_step_shrink: 0.5
+
+  # min_step_factor
+  # ---------------
+  # Never shrink the effective step below this. Prevents infinite refinement.
+  min_step_factor: 1.2
+
+  # max_step_factor
+  # ---------------
+  # Never grow the effective step above this. Prevents wild jumps.
+  max_step_factor: 5.0
+
+
+# =============================================================================
+# execution - parallelism
+# =============================================================================
+execution:
+
+  # max_parallel_experiments
+  # ------------------------
+  # Number of trials to run concurrently. See README for RAM estimates.
+  # Recommended:
+  #   GPU run       : 1 (multiple trials on one GPU will hurt throughput)
+  #   CPU + small   : 2-4
+  #   CPU + large   : scale to available RAM
+  max_parallel_experiments: 1

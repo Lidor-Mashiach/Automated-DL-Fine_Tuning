@@ -1,0 +1,101 @@
+# =============================================================================
+# LSTM (Long Short-Term Memory) - Architecture Configuration
+# =============================================================================
+
+architecture_name: lstm
+
+
+parameters:
+
+  # hidden_size
+  # -----------
+  # Size of the LSTM hidden state. Wider than vanilla RNN can typically afford.
+  hidden_size:
+    enabled: true
+    initial_value: 128
+    choices: [64, 128, 256, 512]
+
+  # num_layers
+  # ----------
+  # Number of stacked LSTM layers. LSTM handles depth better than vanilla RNN.
+  num_layers:
+    enabled: true
+    initial_value: 2
+    range: [1, 4]
+
+  embedding_dim:
+    enabled: true
+    initial_value: 128
+    choices: [64, 128, 256]
+
+
+architectures:
+
+  bidirectional:
+    enabled: true
+    initial_value: true
+    choices: [true, false]
+
+
+methods:
+
+  dropout:
+    enabled: true
+    initial_value: 0.2
+    range: [0.0, 0.5]
+
+  weight_decay:
+    enabled: true
+    initial_value: 1.0e-4
+    range: [1.0e-6, 1.0e-3]
+    log: true
+
+  gradient_clipping:
+    enabled: true
+    initial_value: 1.0
+    range: [0.5, 5.0]
+
+  early_stopping:
+    enabled: true
+    initial_value: true
+    choices: [true, false]
+    patience: 8
+
+
+optimization:
+
+  name:
+    enabled: true
+    initial_value: "adam"
+    choices: ["adam", "adamw"]
+
+  learning_rate:
+    enabled: true
+    initial_value: 1.0e-3
+    range: [1.0e-4, 1.0e-2]
+    log: true
+
+  lr_scheduler:
+    enabled: true
+    initial_value: "cosine"
+    choices: ["none", "cosine", "reduce_on_plateau"]
+
+
+training:
+
+  batch_size:
+    enabled: true
+    initial_value: 64
+    choices: [32, 64, 128]
+
+  epochs:
+    enabled: true
+    initial_value: 50
+
+  validation_split:
+    enabled: true
+    initial_value: 0.2
+
+  sequence_length:
+    enabled: true
+    initial_value: 128

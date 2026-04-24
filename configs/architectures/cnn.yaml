@@ -1,0 +1,204 @@
+# =============================================================================
+# CNN (Convolutional Neural Network) - Architecture Configuration
+# =============================================================================
+# See configs/architectures/mlp.yaml for the full parameter format specification
+# and configs/architectures/README.md for documentation.
+# =============================================================================
+
+architecture_name: cnn
+
+
+# =============================================================================
+# 1) parameters
+# =============================================================================
+parameters:
+
+  # num_conv_blocks
+  # ---------------
+  # Number of Conv-Activation-Pool blocks. Each block halves the spatial size.
+  num_conv_blocks:
+    enabled: true
+    initial_value: 3
+    range: [2, 5]
+
+  # base_filters
+  # ------------
+  # Number of filters in the first conv block. Doubles each block (VGG-style).
+  base_filters:
+    enabled: true
+    initial_value: 32
+    choices: [16, 32, 64]
+
+  # kernel_size
+  # -----------
+  # Size of convolutional kernel (square). 3x3 is standard; 5x5 for larger images.
+  kernel_size:
+    enabled: true
+    initial_value: 3
+    choices: [3, 5]
+
+  # num_fc_layers
+  # -------------
+  # Number of fully-connected layers after the convolutional stack.
+  num_fc_layers:
+    enabled: true
+    initial_value: 1
+    range: [1, 3]
+
+  # fc_size
+  # -------
+  # Width of the first FC layer. Halves each subsequent FC layer.
+  fc_size:
+    enabled: true
+    initial_value: 256
+    choices: [128, 256, 512]
+
+  # activation
+  # ----------
+  # Non-linear activation. See mlp.yaml for descriptions.
+  activation:
+    enabled: true
+    initial_value: "relu"
+    choices: ["relu", "gelu", "leaky_relu"]
+
+
+# =============================================================================
+# 2) architectures
+# =============================================================================
+architectures:
+
+  # pooling
+  # -------
+  # Pooling method between conv blocks:
+  #   max : emphasizes strong features (standard)
+  #   avg : smooths features (sometimes better for small datasets)
+  pooling:
+    enabled: true
+    initial_value: "max"
+    choices: ["max", "avg"]
+
+
+# =============================================================================
+# 3) methods
+# =============================================================================
+methods:
+
+  # dropout
+  # -------
+  # Applied in the FC head. Lower than MLP since conv layers already regularize.
+  dropout:
+    enabled: true
+    initial_value: 0.1
+    range: [0.0, 0.5]
+
+  # batch_norm
+  # ----------
+  # Nearly essential for CNNs - stabilizes training significantly.
+  batch_norm:
+    enabled: true
+    initial_value: true
+    choices: [true, false]
+
+  # weight_decay
+  # ------------
+  weight_decay:
+    enabled: true
+    initial_value: 1.0e-4
+    range: [1.0e-6, 1.0e-3]
+    log: true
+
+  # gradient_clipping
+  # -----------------
+  gradient_clipping:
+    enabled: true
+    initial_value: 1.0
+    range: [0.0, 10.0]
+
+  # data_augmentation
+  # -----------------
+  # Data augmentation strength for training:
+  #   none   : no augmentation (raw data only)
+  #   light  : horizontal flip + random crop
+  #   medium : + color jitter + rotation
+  data_augmentation:
+    enabled: true
+    initial_value: "light"
+    choices: ["none", "light", "medium"]
+
+  # mixup
+  # -----
+  # Blends pairs of training samples. Strong regularizer for small datasets.
+  # 0.0 = disabled. Typical effective values: 0.1-0.4.
+  mixup:
+    enabled: true
+    initial_value: 0.0
+    range: [0.0, 0.4]
+
+  # label_smoothing
+  # ---------------
+  label_smoothing:
+    enabled: true
+    initial_value: 0.0
+    range: [0.0, 0.2]
+
+  # early_stopping
+  # --------------
+  early_stopping:
+    enabled: true
+    initial_value: true
+    choices: [true, false]
+    patience: 10
+
+
+# =============================================================================
+# 4) optimization
+# =============================================================================
+optimization:
+
+  name:
+    enabled: true
+    initial_value: "adamw"
+    choices: ["adam", "adamw", "sgd"]
+
+  learning_rate:
+    enabled: true
+    initial_value: 1.0e-3
+    range: [1.0e-4, 1.0e-2]
+    log: true
+
+  momentum:
+    enabled: true
+    initial_value: 0.9
+    range: [0.8, 0.99]
+
+  lr_scheduler:
+    enabled: true
+    initial_value: "cosine"
+    choices: ["none", "cosine", "step", "reduce_on_plateau"]
+
+
+# =============================================================================
+# 5) training
+# =============================================================================
+training:
+
+  batch_size:
+    enabled: true
+    initial_value: 64
+    choices: [32, 64, 128]
+
+  epochs:
+    enabled: true
+    initial_value: 50
+
+  validation_split:
+    enabled: true
+    initial_value: 0.2
+
+  # image_size
+  # ----------
+  # Target image dimension (images are resized to image_size x image_size).
+  # Larger -> slower but potentially more accurate.
+  image_size:
+    enabled: true
+    initial_value: 64

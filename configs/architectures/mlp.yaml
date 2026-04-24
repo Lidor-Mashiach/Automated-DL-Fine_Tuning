@@ -1,0 +1,225 @@
+# =============================================================================
+# MLP (Multi-Layer Perceptron) - Architecture Configuration
+# =============================================================================
+#
+# Parameter configuration format:
+#   enabled:        true/false. If false, the parameter is never used.
+#   initial_value:  starting value for the root trial. null = system picks.
+#   range:          [min, max] - hard boundary for continuous parameters.
+#                   The Analyzer will never propose values outside this range.
+#   choices:        [a, b, c] - discrete options (mutually exclusive with range).
+#   log:            true for parameters spanning orders of magnitude
+#                   (e.g., learning_rate). Enables log-scale sampling.
+#
+# See configs/architectures/README.md for full documentation.
+# =============================================================================
+
+architecture_name: mlp
+
+
+# =============================================================================
+# 1) parameters - core architecture parameters
+# =============================================================================
+# Scalar parameters that define the width, depth, and activation of the network.
+# =============================================================================
+parameters:
+
+  # num_hidden_layers
+  # -----------------
+  # Number of hidden layers (depth). Too few -> underfit. Too many -> overfit
+  # on small datasets, training instability on deeper ranges.
+  # Typical: 1-5 for most tasks.
+  num_hidden_layers:
+    enabled: true
+    initial_value: 2
+    range: [1, 5]
+
+  # hidden_size
+  # -----------
+  # Width of the primary hidden layer. Interacts with num_hidden_layers: going
+  # wider vs deeper changes what patterns the network can learn.
+  hidden_size:
+    enabled: true
+    initial_value: 128
+    choices: [32, 64, 128, 256, 512]
+
+  # activation
+  # ----------
+  # Non-linear activation function. Different activations suit different tasks:
+  #   relu       : Classic, fast. Risk of "dying ReLU" in deep nets.
+  #   gelu       : Smoother than ReLU. Standard in transformers.
+  #   leaky_relu : Fixes dying ReLU. Good for deep networks.
+  #   tanh       : Output range [-1, 1]. Less common today, useful for RNNs.
+  activation:
+    enabled: true
+    initial_value: "relu"
+    choices: ["relu", "gelu", "leaky_relu", "tanh"]
+
+
+# =============================================================================
+# 2) architectures - structural variants
+# =============================================================================
+# Choices that change the overall shape of the network.
+# =============================================================================
+architectures:
+
+  # layer_shape
+  # -----------
+  # How the width of hidden layers changes from input to output:
+  #   uniform   : all layers same width (e.g. 128-128-128)
+  #   funnel    : width halves each layer (128-64-32)
+  #   pyramid   : width grows each layer (32-64-128)
+  #   hourglass : grows then shrinks (64-128-64)
+  layer_shape:
+    enabled: true
+    initial_value: "uniform"
+    choices: ["uniform", "funnel", "pyramid", "hourglass"]
+
+
+# =============================================================================
+# 3) methods - regularization and training-stability methods
+# =============================================================================
+# Each method can be turned on/off independently. When enabled, the Analyzer
+# decides when to apply or adjust it during the search. When disabled, it is
+# never used in any trial.
+# =============================================================================
+methods:
+
+  # dropout
+  # -------
+  # Randomly drops a fraction of neurons during training to prevent overfitting.
+  # Range: 0.0 (off) to 0.5. Higher -> stronger regularization.
+  dropout:
+    enabled: true
+    initial_value: 0.1
+    range: [0.0, 0.5]
+
+  # batch_norm
+  # ----------
+  # Normalizes activations across the batch for training stability. Usually
+  # beneficial, but can hurt with tiny batch sizes (<8).
+  batch_norm:
+    enabled: true
+    initial_value: true
+    choices: [true, false]
+
+  # weight_decay (L2 regularization)
+  # --------------------------------
+  # Penalizes large weights to prevent overfitting. Log-scaled because values
+  # span orders of magnitude. Higher -> stronger regularization.
+  weight_decay:
+    enabled: true
+    initial_value: 1.0e-4
+    range: [1.0e-6, 1.0e-2]
+    log: true
+
+  # gradient_clipping
+  # -----------------
+  # Clips gradient norm to prevent exploding gradients. Typical value: 1.0.
+  # Set to 0 to disable.
+  gradient_clipping:
+    enabled: true
+    initial_value: 1.0
+    range: [0.0, 10.0]
+
+  # early_stopping (trial-level)
+  # ----------------------------
+  # Stops a SINGLE trial's training when smoothed val_loss hasn't improved
+  # for `patience` epochs. Not related to run-level convergence_patience.
+  # This uses the smoothed curve to avoid stopping on temporary spikes.
+  early_stopping:
+    enabled: true
+    initial_value: true
+    choices: [true, false]
+    patience: 10
+
+  # label_smoothing
+  # ---------------
+  # Softens classification targets (e.g. [0, 1, 0] -> [0.03, 0.94, 0.03]).
+  # Reduces overconfidence and often improves generalization.
+  # Disabled (0.0) by default - Analyzer enables if overfit detected.
+  label_smoothing:
+    enabled: true
+    initial_value: 0.0
+    range: [0.0, 0.2]
+
+
+# =============================================================================
+# 4) optimization - optimizer, learning rate, scheduler
+# =============================================================================
+optimization:
+
+  # name (optimizer)
+  # ----------------
+  # Which optimization algorithm:
+  #   adam    : Most popular, works well on most tasks. Good default.
+  #   adamw   : Adam with correct weight decay handling. Best for deep nets.
+  #   sgd     : With momentum, competes with Adam on final accuracy. Slower.
+  #   rmsprop : Good for RNNs. Sometimes gives more stable training.
+  name:
+    enabled: true
+    initial_value: "adam"
+    choices: ["adam", "adamw", "sgd", "rmsprop"]
+
+  # learning_rate
+  # -------------
+  # Step size for weight updates. The most sensitive parameter in the system.
+  # Log-scaled because it spans 4+ orders of magnitude.
+  # Too high -> divergence / local minima. Too low -> slow or no learning.
+  learning_rate:
+    enabled: true
+    initial_value: 1.0e-3
+    range: [1.0e-5, 1.0e-1]
+    log: true
+
+  # momentum
+  # --------
+  # Accumulates previous gradients to smooth updates. Only used by SGD/RMSprop.
+  # Adam derivatives compute their own momentum internally.
+  momentum:
+    enabled: true
+    initial_value: 0.9
+    range: [0.5, 0.99]
+
+  # lr_scheduler
+  # ------------
+  # Decays learning rate during training. Options:
+  #   none               : constant LR throughout
+  #   cosine             : smooth decay to near-zero by end
+  #   step               : piecewise reduction every N epochs
+  #   reduce_on_plateau  : reduces LR when val_loss stops improving
+  lr_scheduler:
+    enabled: true
+    initial_value: "none"
+    choices: ["none", "cosine", "step", "reduce_on_plateau"]
+
+
+# =============================================================================
+# 5) training - training loop settings
+# =============================================================================
+training:
+
+  # batch_size
+  # ----------
+  # Number of samples per gradient update. Larger -> faster, less noise.
+  # Smaller -> more updates per epoch, can escape local minima.
+  batch_size:
+    enabled: true
+    initial_value: 64
+    choices: [32, 64, 128, 256]
+
+  # epochs
+  # ------
+  # Maximum epochs per trial. early_stopping usually ends earlier.
+  # Fixed (not tuned) so trials remain comparable.
+  epochs:
+    enabled: true
+    initial_value: 50
+
+  # validation_split
+  # ----------------
+  # Fraction of the Train_set used for in-trial validation (during training,
+  # for early_stopping). Unrelated to the Train/Val/Test split in main.py.
+  validation_split:
+    enabled: true
+    initial_value: 0.2

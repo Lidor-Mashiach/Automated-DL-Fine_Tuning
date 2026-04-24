@@ -1,0 +1,47 @@
+# =============================================================================
+# Bayesian (Optuna TPE) - Strategy Configuration
+# =============================================================================
+# Wraps Optuna's TPE sampler for statistical hyperparameter search. Unlike
+# FTTS, this strategy does not build a tree - each trial is independent and
+# Optuna learns the global landscape.
+#
+# The Analyzer still runs on every trial and its diagnosis appears in the
+# report, but Optuna alone decides what to try next.
+# =============================================================================
+
+
+# =============================================================================
+# scoring - same as ftts
+# =============================================================================
+scoring:
+  smoothing_window: 5
+  profile: "balanced"
+  custom_weights: null
+
+
+# =============================================================================
+# stopping - when to stop the run
+# =============================================================================
+stopping:
+  max_trials: 50
+  time_limit_minutes: null
+  target_accuracy: null
+  convergence_patience: 40
+
+
+# =============================================================================
+# Optuna-specific settings
+# =============================================================================
+
+# n_startup_trials
+# ----------------
+# First N trials use random sampling before TPE kicks in. Optuna needs some
+# initial data to build its statistical model.
+n_startup_trials: 10
+
+
+# =============================================================================
+# execution
+# =============================================================================
+execution:
+  max_parallel_experiments: 1

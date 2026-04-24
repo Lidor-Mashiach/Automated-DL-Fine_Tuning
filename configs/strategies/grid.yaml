@@ -1,0 +1,47 @@
+# =============================================================================
+# Grid Search - Strategy Configuration
+# =============================================================================
+# Exhaustively tries every combination of discrete parameter values.
+# Continuous `range` parameters are sampled at N points (grid_points).
+#
+# Best suited for small search spaces (few parameters, few choices each).
+# For larger spaces, prefer FTTS or bayesian.
+# =============================================================================
+
+
+# =============================================================================
+# scoring - same as other strategies
+# =============================================================================
+scoring:
+  smoothing_window: 5
+  profile: "balanced"
+  custom_weights: null
+
+
+# =============================================================================
+# stopping - grid naturally stops when all combinations are done
+# =============================================================================
+stopping:
+  max_trials: 1000             # safety limit - grid naturally stops when done
+  time_limit_minutes: null
+  target_accuracy: null
+  convergence_patience: null
+
+
+# =============================================================================
+# Grid-specific settings
+# =============================================================================
+
+# grid_points
+# -----------
+# Number of points sampled from each continuous `range` parameter.
+# grid_points=3 means: [min, mid, max].
+# Higher = finer search but exponentially more trials.
+grid_points: 3
+
+
+# =============================================================================
+# execution
+# =============================================================================
+execution:
+  max_parallel_experiments: 1

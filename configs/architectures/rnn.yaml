@@ -1,0 +1,117 @@
+# =============================================================================
+# RNN (Vanilla Recurrent Neural Network) - Architecture Configuration
+# =============================================================================
+# See configs/architectures/mlp.yaml for the full parameter format specification.
+# =============================================================================
+
+architecture_name: rnn
+
+
+parameters:
+
+  # hidden_size
+  # -----------
+  # Size of the hidden state vector.
+  hidden_size:
+    enabled: true
+    initial_value: 128
+    choices: [32, 64, 128, 256]
+
+  # num_layers
+  # ----------
+  # Number of stacked RNN layers. Vanilla RNN suffers from vanishing gradients
+  # at high depth - limit to 3.
+  num_layers:
+    enabled: true
+    initial_value: 1
+    range: [1, 3]
+
+  # embedding_dim
+  # -------------
+  # Embedding dimension for NLP tasks (ignored for numeric sequences).
+  embedding_dim:
+    enabled: true
+    initial_value: 128
+    choices: [64, 128, 256]
+
+
+architectures:
+
+  # bidirectional
+  # -------------
+  # If true, processes the sequence both forwards and backwards. Doubles the
+  # output size but often significantly improves performance for NLP.
+  bidirectional:
+    enabled: true
+    initial_value: false
+    choices: [true, false]
+
+
+methods:
+
+  dropout:
+    enabled: true
+    initial_value: 0.1
+    range: [0.0, 0.5]
+
+  weight_decay:
+    enabled: true
+    initial_value: 1.0e-4
+    range: [1.0e-6, 1.0e-3]
+    log: true
+
+  # gradient_clipping
+  # -----------------
+  # Essential for RNNs - they are prone to exploding gradients.
+  gradient_clipping:
+    enabled: true
+    initial_value: 1.0
+    range: [0.5, 5.0]
+
+  early_stopping:
+    enabled: true
+    initial_value: true
+    choices: [true, false]
+    patience: 8
+
+
+optimization:
+
+  name:
+    enabled: true
+    initial_value: "adam"
+    choices: ["adam", "adamw", "rmsprop"]
+
+  learning_rate:
+    enabled: true
+    initial_value: 1.0e-3
+    range: [1.0e-4, 1.0e-2]
+    log: true
+
+  lr_scheduler:
+    enabled: true
+    initial_value: "none"
+    choices: ["none", "cosine", "reduce_on_plateau"]
+
+
+training:
+
+  batch_size:
+    enabled: true
+    initial_value: 64
+    choices: [32, 64, 128]
+
+  epochs:
+    enabled: true
+    initial_value: 40
+
+  validation_split:
+    enabled: true
+    initial_value: 0.2
+
+  # sequence_length
+  # ---------------
+  # Fixed sequence length (sequences are truncated or padded).
+  sequence_length:
+    enabled: true
+    initial_value: 128
