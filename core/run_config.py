@@ -1,8 +1,7 @@
 """
 RunConfig
 ---------
-Small dataclass that bundles the user's main.py choices. Stopping conditions,
-scoring profile, and parallelism live in the strategy YAML, not here.
+Small dataclass that bundles the user's main.py choices.
 """
 
 from dataclasses import dataclass, asdict
@@ -11,18 +10,21 @@ from typing import Optional
 
 @dataclass
 class RunConfig:
-    """What the user selects at the top of main.py."""
+    """User selections from main.py."""
+
+    # Identity
+    run_name: str
 
     # High-level choices
-    architecture: str                      # mlp / cnn / rnn / lstm / transformer
-    search_strategy: str                   # ftts / bayesian / grid
-    task_type: str                         # classification / regression
+    architecture: str
+    search_strategy: str
+    task_type: str
 
     # Data source
-    dataset_mode: str                      # local / imported
+    dataset_mode: str
     local_dataset_path: str
     imported_dataset_name: str
-    data_type: str                         # tabular / image / text
+    data_type: str
     feature_columns: Optional[list]
     label_column: Optional[str]
     train_pct: float
@@ -30,13 +32,12 @@ class RunConfig:
     test_pct: float
 
     # Hardware
-    device: str                            # resolved: cpu / cuda / cuda:N
+    device: str
     random_seed: Optional[int]
 
     # Output
     experiments_root: str
 
-    # ----- valid values -----
     _VALID_ARCH = ("mlp", "cnn", "rnn", "lstm", "transformer")
     _VALID_STRATEGY = ("ftts", "bayesian", "grid")
     _VALID_DATA_TYPES = ("tabular", "image", "text")
@@ -44,6 +45,8 @@ class RunConfig:
     _VALID_MODES = ("local", "imported")
 
     def validate(self) -> None:
+        if not self.run_name or not self.run_name.strip():
+            raise ValueError("RUN_NAME must be a non-empty string.")
         if self.architecture not in self._VALID_ARCH:
             raise ValueError(
                 f"architecture='{self.architecture}' invalid. "
@@ -66,11 +69,13 @@ class RunConfig:
             raise ValueError(
                 f"train_pct + val_pct + test_pct must equal 1.0, got {total}."
             )
-        for name, pct in [("train_pct", self.train_pct),
-                          ("val_pct", self.val_pct),
-                          ("test_pct", self.test_pct)]:
-            if not (0.0 <= pct <= 1.0):
-                raise ValueError(f"{name}={pct} must be in [0, 1].")
+
+    def dataset_label(self) -> str:
+        """A short label identifying the dataset (used in folder name)."""
+        if self.dataset_mode == "imported":
+            return self.imported_dataset_name.lower()
+        from pathlib import Path
+        return Path(self.local_dataset_path).stem.lower()
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if not k.startswith("_")}

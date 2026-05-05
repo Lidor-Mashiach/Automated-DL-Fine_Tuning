@@ -10,10 +10,14 @@ The framework runs a series of experiments, analyzes what happened in each one (
 
 - 🏗️ **5 architectures out of the box** — MLP, CNN, RNN, LSTM, Transformer.
 - 🧪 **Smart Analyzer** — diagnoses training curves and proposes prioritized actions.
-- 🌳 **FTTS (Fine-Tuning Tree Search)** — a tree-based search with backtracking and adaptive step sizes, fully explainable in the final report.
+- 🌳 **FTTS (Fine-Tuning Tree Search)** — tree-based search with backtracking, adaptive step sizes, and **DAG deduplication** (skips already-explored hyperparameter combinations).
+- 🎯 **Context-aware layer shape selection (MLP)** — Analyzer picks the right pattern (uniform / funnel / pyramid / hourglass / bottleneck) based on the verdict; user doesn't have to choose manually.
 - 🔄 **Multiple search strategies** — FTTS (default), Bayesian (Optuna), Grid search.
+- 🚀 **Modern training optimizations** — Mixed Precision (fp16/AMP), Gradient Accumulation, Focal Loss with auto class-imbalance detection, Label Smoothing.
+- 🎨 **Advanced augmentation** — Mixup + CutMix + CutOut for images; Token Dropout / Word Shuffle / N-gram Shuffle for text; Stochastic Depth for deep Transformers.
 - 📋 **Per-architecture and per-strategy configs** — YAML files with thematic sections, docstrings, and no magic.
 - 📝 **Unified text report** — a single `report.txt` documenting every trial, its parent, its rationale, and its diagnosis.
+- 📦 **Standalone deliverable** — generates a self-contained `model.py` for the best trial.
 - 🖥️ **Works on GPU, CPU, and SLURM** — automatic device fallback and non-blocking plots.
 
 ---
@@ -49,6 +53,8 @@ Each subdirectory has its own README with deeper detail. This document stays hig
 ---
 
 ## 🚀 Getting Started
+
+> 📖 **For a step-by-step walkthrough, see [`SETUP_GUIDE.md`](SETUP_GUIDE.md).** It covers installation, data preparation, and configuration in order. The summary below is a condensed version for those already familiar with similar tools.
 
 ### 📦 First-Time Setup
 
@@ -134,15 +140,24 @@ python main.py
 
 ## 📤 Output
 
-For each run, a new folder is created under `experiments/`:
+Each run creates a folder named `<RUN_NAME>_<strategy>_<dataset>_<ranking>/` under `experiments/`:
 
 ```
-experiments/20260421_143022_mlp_ftts/
-├── report.txt              Unified, human-readable trial log (appended live).
-└── best_trial.png          Training curves of the best trial (updates live).
+experiments/experiment1_ftts_iris_qualityscore/
+├── tuning/
+│   ├── report.txt           Unified, human-readable trial log (appended live).
+│   └── best_trial.png       Training curves of the best tuning trial.
+└── final/
+    ├── model.py             Standalone code of the chosen architecture.
+    ├── final_training.png   Final refit training curves (Train+Val).
+    └── test_evaluation.txt  Final evaluation results on Test_set.
 ```
 
-### 📝 Inside `report.txt`
+> 📦 **`final/model.py` is the actual deliverable** — a standalone script that rebuilds the architecture, retrains it on Train+Val combined, and evaluates on Test_set. You can take this file alone to another project; it has no dependency on AutoTune-NN itself.
+
+> 🔄 **The Final Test Evaluation phase** runs automatically after tuning. The best trial's hyperparameters are used to train a fresh model on Train+Val combined ("refit on full training set" — standard ML practice), and that model is evaluated on the held-out Test_set. This is the only time Test_set is touched.
+
+### 📝 Inside `tuning/report.txt`
 
 For every trial:
 
@@ -242,11 +257,60 @@ See [`FUTURE_WORK.md`](FUTURE_WORK.md) for planned extensions, including:
 
 ## ❓ Common Questions
 
+**Q: How do I get started?**
+Read [`SETUP_GUIDE.md`](SETUP_GUIDE.md) — it walks you through installation, data preparation, and configuration in order.
+
 **Q: What happens if I press Ctrl+C mid-run?**
 The `report.txt` is written after every trial, so you keep everything done so far. The best trial's plot is also saved live.
 
-**Q: Why is `STOP_TARGET_ACCURACY` in the strategy YAML, not in `main.py`?**
-`main.py` holds high-level choices (which architecture, which strategy). Numeric knobs belong in the YAML config of the strategy you chose, so settings don't get tangled across strategies.
+**Q: How do I configure when the run stops?**
+Stopping conditions live in `configs/strategies/<strategy>.yaml` under `stopping:`. There are four conditions; the run stops as soon as **any** one fires:
+
+```yaml
+stopping:
+  max_trials: 50              # cap on number of trials
+  time_limit_minutes: null    # wall-clock budget in minutes
+  target_accuracy: null       # stop when smoothed val accuracy reaches this
+  convergence_patience: 40    # stop after N trials with no improvement
+```
+
+To **disable** a condition, set it to `null`. **At least one must be active** (the orchestrator validates this at startup). See [`SETUP_GUIDE.md` §11](SETUP_GUIDE.md#11-strategy-configuration) for recommended combinations and detailed value ranges.
 
 **Q: How do I force a specific learning rate?**
+In the relevant `configs/architectures/<arch>.yaml`, set the `learning_rate` parameter's `range: [your_value, your_value]` (single value). The same approach works for any continuous parameter. For discrete parameters, set `choices: ["your_value"]`.
+
+**Q: How does AutoTune-NN choose the MLP layer shape (uniform / funnel / bottleneck / etc.)?**
+Automatically — based on the diagnosis. If the model overfits, the Analyzer suggests `bottleneck` or `funnel` (compress information). If it underfits, it suggests `hourglass` (richer middle). You don't pick manually. To restrict the search to one shape, set `choices: ["bottleneck"]` in `mlp.yaml`.
+
+**Q: What's the `optimizer_name` parameter?**
+Previously called `name` — renamed for clarity. It's the optimizer choice (`adam`, `adamw`, `sgd`, `rmsprop`). The Adam beta1/beta2 parameters are present but disabled by default (PyTorch's standard 0.9 / 0.999 are used).
 In `configs/architectures/<arch>.yaml`, find `learning_rate` and set `initial_value` to your preferred starting point. You can optionally narrow `range` too. The Analyzer will still explore from there.
+
+**Q: How does the Test_set get used?**
+Only **once**, at the very end. After tuning is complete, the best hyperparameters are used to retrain a fresh model on Train+Val combined; that model is then evaluated on Test_set. This is standard practice in ML and avoids data leakage.
+
+**Q: How does AutoTune-NN handle imbalanced classes?**
+Automatically. When the data is loaded, the class distribution is checked. If `loss_function: "auto"` (the default), the system picks Focal Loss with a tuned `gamma` based on the imbalance ratio:
+- ratio < 3:1 → CrossEntropy (balanced)
+- 3:1–10:1 → Focal Loss with γ=1.5
+- > 10:1 → Focal Loss with γ=2.5
+
+You can override by setting `loss_function` to a specific value in the architecture YAML.
+
+**Q: I want to run multiple datasets in parallel. Will they collide?**
+No. Each local dataset gets its own split sub-folder (`Data/<filename>_split/`), so concurrent runs don't overwrite each other. Each run's output folder is also unique by `RUN_NAME`.
+
+**Q: How big should my network be?**
+See the [Sizing Your Network](SETUP_GUIDE.md#-sizing-your-network-how-deep-how-wide) section in `SETUP_GUIDE.md`. It has rule-of-thumb tables for each architecture and problem size.
+
+**Q: How much RAM does AutoTune-NN use?**
+Most cost is the model itself, not the framework. The FTTS tree only stores trial metadata (~2 KB per trial; an entire tree of 25,000 trials ≈ 50 MB). Typical model footprints:
+- MLP: 50-200 MB
+- CNN (medium): 1-2 GB
+- Transformer (medium): 1-3 GB
+- Transformer (12 layers, d_model=512): 8-16 GB
+
+If you have 32+ GB of RAM, you can comfortably explore deep networks. With 128 GB, even very large transformers fit easily.
+
+**Q: How do I make FTTS try deeper architectures?**
+Edit the relevant `range` in `configs/architectures/<arch>.yaml`. For example, raise Transformer's `num_encoder_layers` `range: [2, 6]` to `[2, 24]`. FTTS won't waste trials going deep unnecessarily — it only suggests `add_depth` when the Analyzer detects it would help.

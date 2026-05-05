@@ -126,3 +126,55 @@ Best for: 2-3 parameters, few choices each.
 ## 🧵 Thread Safety
 
 The `ExperimentTree` uses a `threading.Lock` around all state mutations. Multiple trials can run concurrently (controlled by `max_parallel_experiments` in the strategy YAML) without race conditions.
+
+---
+
+## ⚠️ Important: FTTS always uses quality_score internally
+
+The `ranking_metric` parameter (in `configs/strategies/<strategy>.yaml`) controls **only** which trial is picked as the final "best" — the one written to `final/model.py`. It does **not** change FTTS's tree-search behavior.
+
+Concretely:
+
+- **Inside FTTS**: every node in the tree is ranked by `parent.quality_score × action.priority`. This is **always** the case, regardless of `ranking_metric`.
+- **At the very end**: the system picks the "best trial" using the configured `ranking_metric`:
+  - `quality_score` (default) — same as the internal ranking.
+  - `smoothed_accuracy` — picks the highest smoothed val accuracy.
+  - `raw_accuracy` — picks the highest single-epoch peak.
+
+This separation is intentional: FTTS performs better when guided by the composite (stability matters during search), but for reporting you might want a different selection criterion.
+
+---
+
+## 🔗 Related Documents
+
+- [`README.md`](../README.md) — project overview
+- [`configs/strategies/README.md`](../configs/strategies/README.md) — strategy YAML format
+- [`core/README.md`](../core/README.md) — Quality Score components
+
+---
+
+## 🧠 Context-Aware Layer Shape Suggestions
+
+When the Analyzer wants to change `layer_shape` (MLP), it picks the specific pattern most likely to help, rather than cycling through all of them. Logic:
+
+| Verdict | Suggested patterns (with priority) | Why |
+|---|---|---|
+| `overfit` | `bottleneck` (0.55), `funnel` (0.40) | Both compress information → implicit regularization |
+| `failed_to_learn` | `hourglass` (0.55), `uniform` (0.40) | Hourglass widens in middle for more capacity |
+| `slow` | `funnel` (0.45) | Fewer params in deep layers → faster training |
+| `healthy` | `bottleneck` (0.30), `pyramid` (0.25) | Exploration only |
+
+The current shape is skipped (would be a no-op). Implemented in `core/analyzer.py::_propose_layer_shapes`.
+
+---
+
+## 🔄 DAG Deduplication
+
+FTTS tracks every hyperparameter configuration it has explored or queued, using a deterministic JSON signature. When a proposed action would produce a duplicate configuration (e.g., `try_layer_shape_uniform` from a node that already has `uniform` after some other path), FTTS silently skips it and moves to the next action.
+
+This:
+- Saves trial budget for genuinely new configurations.
+- Prevents wasted compute on revisited nodes.
+- Is logged when it happens: `[ftts] dedup: skipping action 'X' from TN - target HP already explored.`
+
+Implemented in `search_strategies/ftts.py::_hp_signature` and used by `propose_next`.

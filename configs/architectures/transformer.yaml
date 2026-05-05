@@ -46,8 +46,14 @@ parameters:
     initial_value: "gelu"
     choices: ["relu", "gelu"]
 
+  # embedding_dim
+  # -------------
+  # In this Transformer implementation, the embedding dimension is forced to
+  # equal `d_model` (a standard convention; required for residual connections
+  # to work with the encoder layer outputs). This parameter is kept for YAML
+  # consistency but disabled - changing it has no effect.
   embedding_dim:
-    enabled: true
+    enabled: false
     initial_value: 128
     choices: [64, 128, 256]
 
@@ -58,8 +64,10 @@ architectures:
   # -------------------
   # Positional information added to token embeddings:
   #   sinusoidal : fixed sinusoids (no parameters to learn)
+  # Currently only sinusoidal is implemented. Disabled because there's only
+  # one option; kept here for future extensibility (learned/relative).
   positional_encoding:
-    enabled: true
+    enabled: false
     initial_value: "sinusoidal"
     choices: ["sinusoidal"]
 
@@ -118,7 +126,7 @@ methods:
 
 optimization:
 
-  name:
+  optimizer_name:
     enabled: true
     initial_value: "adamw"
     choices: ["adam", "adamw"]
@@ -156,3 +164,114 @@ training:
   sequence_length:
     enabled: true
     initial_value: 128
+
+  # loss_function - see configs/architectures/mlp.yaml for full docs
+  loss_function:
+    enabled: true
+    initial_value: "auto"
+    choices: ["auto", "cross_entropy", "focal", "mse"]
+
+  # focal_gamma - see mlp.yaml. Used only when loss_function=focal.
+  focal_gamma:
+    enabled: true
+    initial_value: 2.0
+    range: [0.5, 5.0]
+
+  # num_workers - see mlp.yaml.
+  num_workers:
+    enabled: true
+    initial_value: 2
+    range: [0, 8]
+
+  # text_augmentation - see rnn.yaml for full docs.
+  text_augmentation:
+    enabled: true
+    initial_value: "none"
+    choices: ["none", "token_dropout", "word_shuffle", "ngram_shuffle"]
+
+  # text_augmentation_prob - see rnn.yaml.
+  text_augmentation_prob:
+    enabled: true
+    initial_value: 0.1
+    range: [0.0, 0.3]
+
+
+  # gradient_accumulation_steps
+  # ---------------------------
+  # Accumulate gradients over N batches before stepping the optimizer.
+  # Effective batch size = batch_size * gradient_accumulation_steps.
+  # Use this to simulate large batches when GPU memory is limited.
+  #   1 = no accumulation (default, single step per batch).
+  #   2-8 = accumulate; useful when you want batch_size=256 but only RAM for 32.
+  gradient_accumulation_steps:
+    enabled: true
+    initial_value: 1
+    range: [1, 8]
+
+  # mixed_precision
+  # ---------------
+  # Use fp16 (half precision) on GPU to roughly double training speed and
+  # halve VRAM usage. Has no effect on CPU.
+  #   true  : enables torch.cuda.amp autocast + GradScaler.
+  #   false : standard fp32 training (default - safest).
+  mixed_precision:
+    enabled: true
+    initial_value: false
+    choices: [true, false]
+
+  # embedding_dropout
+  # -----------------
+  # Dropout applied to the embedding layer output before feeding it to the RNN/Transformer.
+  # Different from `dropout` (which acts inside the recurrent layers).
+  # Useful regularization technique specific to NLP architectures.
+  #   0.0  : no embedding dropout (default).
+  #   0.1-0.3: typical range; helps prevent the embedding lookup from overfitting.
+  embedding_dropout:
+    enabled: true
+    initial_value: 0.0
+    range: [0.0, 0.4]
+
+
+# =============================================================================
+# Advanced optimizer parameters (disabled by default - for expert tuning)
+# =============================================================================
+
+  # adam_beta1
+  # ----------
+  # First moment decay rate for Adam/AdamW. Disabled by default.
+  # Standard value 0.9 is optimal for ~99% of tasks. Lower (0.85) sometimes
+  # helps very large batch training. Enable only if you know what you're doing.
+  adam_beta1:
+    enabled: false
+    initial_value: 0.9
+    range: [0.85, 0.95]
+
+  # adam_beta2
+  # ----------
+  # Second moment decay rate for Adam/AdamW. Disabled by default.
+  # Standard value 0.999 is optimal for ~99% of tasks. Some recipes (GPT-style)
+  # use 0.95 for very large models. Enable only if you know what you're doing.
+  adam_beta2:
+    enabled: false
+    initial_value: 0.999
+    range: [0.9, 0.9999]
+
+
+# =============================================================================
+# Deep-only regularization
+# =============================================================================
+
+  # stochastic_depth
+  # ----------------
+  # Drops entire encoder layers randomly during training (replaces them with
+  # an identity skip). Useful regularizer for DEEP transformers (>= 4 layers).
+  # When num_encoder_layers < 4, this parameter has no effective impact even
+  # if enabled.
+  #   0.0  : disabled (default)
+  #   0.1  : drop ~10% of layers per forward pass (mild)
+  #   0.2  : moderate; helps ViT-Large, BERT-Large
+  #   0.3+ : aggressive; only for very deep nets (12+ layers)
+  stochastic_depth:
+    enabled: true
+    initial_value: 0.0
+    range: [0.0, 0.3]

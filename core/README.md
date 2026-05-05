@@ -83,3 +83,97 @@ When `max_parallel_experiments > 1`, multiple trials run concurrently.
 - The `ExperimentTree` (in `search_strategies/experiment_tree.py`) uses an internal `threading.Lock` for all state mutations.
 - The `Reporter` writes atomically after each trial.
 - No race conditions by design.
+
+---
+
+## 📐 Loss vs Accuracy vs Metric
+
+These three terms are often confused, but they measure different things.
+
+### Loss (technical / mathematical)
+
+**Loss is NOT "the percentage of mistakes."** It is a mathematical function the optimizer tries to minimize. It captures how **confident** the model is in its (correct or wrong) answers.
+
+**Cross-Entropy example** — all three predictions are CORRECT but loss differs:
+
+| Model says...                       | Loss   |
+|-------------------------------------|--------|
+| 99% confident → answer A (correct)  | 0.01   |
+| 60% confident → answer A (correct)  | 0.51   |
+| 10% confident → answer A (correct)  | 2.30   |
+
+The model that's MORE confident in correct answers gets a LOWER loss, even though all three are technically right. In production, a 99%-confident-and-right model is far more trustworthy than a 51%-confident-and-right one.
+
+### Accuracy (human / interpretable)
+
+`accuracy = correct_predictions / total_predictions`. A simple percentage in `[0, 1]`.
+
+### Metric (the human-readable score)
+
+A general term meaning "the number we report to humans," depending on the task:
+
+- Classification → `accuracy`
+- Regression → `-RMSE` (negative so "higher is better")
+
+### Why we track both Loss and Metric
+
+- **Loss** drives the optimizer (it is differentiable and well-behaved).
+- **Loss on Val_set** detects overfitting: when train_loss keeps dropping but val_loss starts rising, the model is memorizing.
+- **Metric (accuracy)** is what we report.
+
+In our reports you'll see all four: `train_loss`, `val_loss`, `train_metric`, `val_metric`.
+
+---
+
+## 🚫 Why we don't put Softmax in the architectures
+
+PyTorch's `nn.CrossEntropyLoss` already includes Softmax internally — it accepts raw logits and computes `Softmax + log + NLLLoss` in a single numerically-stable step.
+
+**If you add `nn.Softmax` as the final layer, Softmax is applied twice**, which:
+- Hurts gradient flow.
+- Reduces numerical stability.
+- Slows training.
+
+Our architectures emit raw logits; the loss function handles the rest. This is the standard PyTorch pattern.
+
+---
+
+## 🎯 Loss function selection (auto)
+
+When `loss_function: "auto"` (the default), the system picks based on `TASK_TYPE` and detected class imbalance:
+
+| Task type | Imbalance ratio | Loss chosen |
+|---|---|---|
+| classification | < 3:1 | CrossEntropy |
+| classification | 3:1 – 10:1 | Focal Loss (γ=1.5) |
+| classification | > 10:1 | Focal Loss (γ=2.5) |
+| regression | (always) | MSE |
+
+The user can override by setting `loss_function` to a specific value in the architecture YAML (`cross_entropy`, `focal`, `mse`).
+
+**Focal Loss** down-weights easy (high-confidence-correct) examples so the model focuses on hard ones — useful for imbalanced classes. The `focal_gamma` parameter controls how aggressive the focusing is.
+
+---
+
+## 🔚 The Final Refit & Test Evaluation Phase
+
+After tuning finishes, AutoTune-NN runs one extra phase before exiting:
+
+1. Pick the best trial (per the `ranking_metric` in the strategy YAML).
+2. Build a fresh model with that trial's hyperparameters.
+3. Train it on **Train + Val combined** ("refit on full training set" — standard ML practice).
+4. Evaluate it on the held-out **Test_set** (the only time Test is touched).
+5. Generate `final/model.py` (standalone, runnable) and `final/test_evaluation.txt`.
+
+This phase is implemented in `core/final_trainer.py` and `core/code_generator.py`.
+
+
+---
+
+## 🔗 Related Documents
+
+- [`README.md`](../README.md) — project overview
+- [`SETUP_GUIDE.md`](../SETUP_GUIDE.md) — step-by-step usage
+- [`search_strategies/README.md`](../search_strategies/README.md) — FTTS algorithm
+- [`models/README.md`](../models/README.md) — architecture builders
+- [`reporting/README.md`](../reporting/README.md) — output formats

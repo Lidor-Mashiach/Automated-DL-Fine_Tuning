@@ -56,3 +56,10 @@ Save the state of the best trial, and allow new trials to warm-start from it (fi
 ## 7. 🖥️ Live Dashboard
 
 Real-time visualization (Streamlit / Gradio) with live curves, instead of just the final PNG.
+
+---
+
+## 🔗 Related Documents
+
+- [`README.md`](README.md) — project overview
+- [`SETUP_GUIDE.md`](SETUP_GUIDE.md) — current usage walkthrough

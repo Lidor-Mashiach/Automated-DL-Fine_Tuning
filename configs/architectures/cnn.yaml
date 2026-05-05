@@ -155,7 +155,7 @@ methods:
 # =============================================================================
 optimization:
 
-  name:
+  optimizer_name:
     enabled: true
     initial_value: "adamw"
     choices: ["adam", "adamw", "sgd"]
@@ -202,3 +202,98 @@ training:
   image_size:
     enabled: true
     initial_value: 64
+
+  # loss_function - see configs/architectures/mlp.yaml for full docs
+  loss_function:
+    enabled: true
+    initial_value: "auto"
+    choices: ["auto", "cross_entropy", "focal", "mse"]
+
+  # focal_gamma - see mlp.yaml. Used only when loss_function=focal.
+  focal_gamma:
+    enabled: true
+    initial_value: 2.0
+    range: [0.5, 5.0]
+
+  # num_workers - see mlp.yaml. Higher recommended for image data.
+  num_workers:
+    enabled: true
+    initial_value: 2
+    range: [0, 8]
+
+
+  # gradient_accumulation_steps
+  # ---------------------------
+  # Accumulate gradients over N batches before stepping the optimizer.
+  # Effective batch size = batch_size * gradient_accumulation_steps.
+  # Use this to simulate large batches when GPU memory is limited.
+  #   1 = no accumulation (default, single step per batch).
+  #   2-8 = accumulate; useful when you want batch_size=256 but only RAM for 32.
+  gradient_accumulation_steps:
+    enabled: true
+    initial_value: 1
+    range: [1, 8]
+
+  # mixed_precision
+  # ---------------
+  # Use fp16 (half precision) on GPU to roughly double training speed and
+  # halve VRAM usage. Has no effect on CPU.
+  #   true  : enables torch.cuda.amp autocast + GradScaler.
+  #   false : standard fp32 training (default - safest).
+  mixed_precision:
+    enabled: true
+    initial_value: false
+    choices: [true, false]
+
+
+# =============================================================================
+# Advanced optimizer parameters (disabled by default - for expert tuning)
+# =============================================================================
+
+  # adam_beta1
+  # ----------
+  # First moment decay rate for Adam/AdamW. Disabled by default.
+  # Standard value 0.9 is optimal for ~99% of tasks. Lower (0.85) sometimes
+  # helps very large batch training. Enable only if you know what you're doing.
+  adam_beta1:
+    enabled: false
+    initial_value: 0.9
+    range: [0.85, 0.95]
+
+  # adam_beta2
+  # ----------
+  # Second moment decay rate for Adam/AdamW. Disabled by default.
+  # Standard value 0.999 is optimal for ~99% of tasks. Some recipes (GPT-style)
+  # use 0.95 for very large models. Enable only if you know what you're doing.
+  adam_beta2:
+    enabled: false
+    initial_value: 0.999
+    range: [0.9, 0.9999]
+
+
+# =============================================================================
+# Advanced image augmentation
+# =============================================================================
+
+  # cutout
+  # ------
+  # Randomly mask a square region of the image during training (replaces it
+  # with zeros or the dataset mean). Acts as strong spatial regularizer.
+  #   0.0      : disabled (default)
+  #   0.1-0.4  : mask size as fraction of image_size; 0.25 is a good start
+  cutout:
+    enabled: true
+    initial_value: 0.0
+    range: [0.0, 0.4]
+
+  # cutmix
+  # ------
+  # Cuts a square patch from one image and pastes it onto another, mixing
+  # the labels proportionally to patch areas. Stronger than mixup for some tasks.
+  #   0.0      : disabled (default)
+  #   0.5-1.0  : alpha for the Beta distribution that picks patch size; 1.0 typical
+  # Note: cutmix and mixup can be enabled together; system picks one per batch.
+  cutmix:
+    enabled: true
+    initial_value: 0.0
+    range: [0.0, 1.0]

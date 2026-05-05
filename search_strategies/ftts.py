@@ -47,6 +47,18 @@ _DEFAULT_STEP_FACTORS = {
     "decrease_dropout": 0.1,
     # Warmup additive
     "increase_warmup": 500,
+    # Focal gamma additive (0.5 at a time)
+    "increase_focal_gamma": 0.5,
+    "decrease_focal_gamma": 0.5,
+    # Text augmentation prob (0.05 at a time)
+    "increase_text_augmentation": 0.05,
+    # Embedding dropout (0.1 at a time)
+    "increase_embedding_dropout": 0.1,
+    # Stochastic depth (0.05 at a time)
+    "increase_stochastic_depth": 0.05,
+    # Adam betas (small adjustments)
+    "adjust_adam_beta1": 0.02,
+    "adjust_adam_beta2": 0.005,
 }
 
 
@@ -75,7 +87,22 @@ class FTTS:
 
         self._root_registered = False
 
+        # DAG dedup: track which HP signatures have already been explored
+        # so different action paths don't re-evaluate the same configuration.
+        self._seen_signatures: set[str] = set()
+
     # ---------------------------------------------- public API
+
+    def _hp_signature(self, hp: dict) -> str:
+        """
+        Produce a deterministic signature for a hyperparameter dict.
+        Used to skip duplicates across different action paths (DAG-dedup).
+        """
+        import json
+        # Filter to only the keys that affect training
+        # (skip metadata-like keys with __ prefix if any)
+        relevant = {k: v for k, v in hp.items() if not k.startswith("__")}
+        return json.dumps(relevant, sort_keys=True, default=str)
 
     def initial_hyperparameters(self) -> dict:
         """Build the root hyperparameters from initial_value fields of the YAML."""
@@ -92,11 +119,18 @@ class FTTS:
         self.tree.register_root(trial_id, hp,
                                 rationale="Root trial: starting from config initial values.")
         self._root_registered = True
+        self._seen_signatures.add(self._hp_signature(hp))
 
     def propose_next(self) -> tuple[str, dict, Any, str] | None:
         """
         Pop the next (parent_id, action) pair from the tree and produce the
         hyperparameters for the child.
+
+        Skips duplicates: if applying the action produces a hyperparameter
+        configuration that was already evaluated (or queued via another path),
+        we transparently move on to the next action in the queue. This
+        prevents wasteful re-exploration of the same node from different
+        branches (DAG semantics).
 
         Returns:
             (parent_id, child_hp, action_applied, rationale) or None if queue empty.
@@ -115,6 +149,14 @@ class FTTS:
         if not changes_made:
             # Action could not be applied (e.g., param disabled). Try next one.
             return self.propose_next()
+
+        # DAG-dedup: skip if this exact HP combination has been seen before
+        signature = self._hp_signature(child_hp)
+        if signature in self._seen_signatures:
+            print(f"[ftts] dedup: skipping action '{action.type}' from "
+                  f"{parent_id} - target HP already explored.")
+            return self.propose_next()
+        self._seen_signatures.add(signature)
 
         rationale = (
             f"Based on {parent_id} (verdict={parent.verdict}, quality="
@@ -239,9 +281,17 @@ class FTTS:
                                                    "fc_size", "base_filters"],
                                               direction=-1)
 
-        # ----- layer shape -----
-        if t == "change_layer_shape":
-            return self._cycle_choice(hp, "layer_shape")
+        # ----- layer shape (one action per pattern) -----
+        if t == "try_layer_shape_uniform":
+            return self._set_choice(hp, "layer_shape", "uniform")
+        if t == "try_layer_shape_funnel":
+            return self._set_choice(hp, "layer_shape", "funnel")
+        if t == "try_layer_shape_pyramid":
+            return self._set_choice(hp, "layer_shape", "pyramid")
+        if t == "try_layer_shape_hourglass":
+            return self._set_choice(hp, "layer_shape", "hourglass")
+        if t == "try_layer_shape_bottleneck":
+            return self._set_choice(hp, "layer_shape", "bottleneck")
 
         # ----- activation -----
         if t == "change_activation":
@@ -250,7 +300,7 @@ class FTTS:
         # ----- optimizer -----
         if t == "change_optimizer":
             new_val = action.suggested_value or "adamw"
-            return self._set_choice(hp, "name", new_val)
+            return self._set_choice(hp, "optimizer_name", new_val)
 
         # ----- gradient clipping -----
         if t == "add_gradient_clipping":
@@ -297,6 +347,63 @@ class FTTS:
         # ----- batch norm -----
         if t == "enable_batch_norm":
             return self._set_value(hp, "batch_norm", True)
+
+        # ----- loss function: focal / cross_entropy switch -----
+        if t == "try_focal_loss":
+            return self._set_choice(hp, "loss_function", "focal")
+        if t == "try_cross_entropy":
+            return self._set_choice(hp, "loss_function", "cross_entropy")
+
+        # ----- focal_gamma tuning (only relevant if focal is active) -----
+        if t == "increase_focal_gamma":
+            return self._adjust_additive(hp, "focal_gamma",
+                                          delta_sign=+1, action_type=t)
+        if t == "decrease_focal_gamma":
+            return self._adjust_additive(hp, "focal_gamma",
+                                          delta_sign=-1, action_type=t)
+
+        # ----- normalization scheme switch -----
+        if t == "change_normalization":
+            return self._cycle_choice(hp, "normalization")
+
+        # ----- text augmentation -----
+        if t == "change_text_augmentation":
+            return self._cycle_choice(hp, "text_augmentation")
+        if t == "increase_text_augmentation":
+            return self._adjust_additive(hp, "text_augmentation_prob",
+                                          delta_sign=+1, action_type=t)
+
+        # ----- gradient accumulation + mixed precision -----
+        if t == "increase_grad_accumulation":
+            current = int(hp.get("gradient_accumulation_steps", 1))
+            return self._set_value(hp, "gradient_accumulation_steps",
+                                    min(current * 2, 8))
+        if t == "enable_mixed_precision":
+            return self._set_value(hp, "mixed_precision", True)
+
+        # ----- embedding dropout (NLP) -----
+        if t == "increase_embedding_dropout":
+            return self._adjust_additive(hp, "embedding_dropout",
+                                          delta_sign=+1, action_type=t)
+
+        # ----- advanced image augmentation -----
+        if t == "enable_cutout":
+            return self._set_value(hp, "cutout", 0.25)
+        if t == "enable_cutmix":
+            return self._set_value(hp, "cutmix", 1.0)
+
+        # ----- stochastic depth (deep transformer regularization) -----
+        if t == "increase_stochastic_depth":
+            return self._adjust_additive(hp, "stochastic_depth",
+                                          delta_sign=+1, action_type=t)
+
+        # ----- adam betas (advanced) -----
+        if t == "adjust_adam_beta1":
+            return self._adjust_additive(hp, "adam_beta1",
+                                          delta_sign=-1, action_type=t)
+        if t == "adjust_adam_beta2":
+            return self._adjust_additive(hp, "adam_beta2",
+                                          delta_sign=-1, action_type=t)
 
         return None
 

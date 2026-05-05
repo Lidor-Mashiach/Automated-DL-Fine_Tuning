@@ -4,41 +4,30 @@
 ================================================================================
 
 This file contains only the TOP-LEVEL SELECTIONS for a run:
+  - A label for this run (RUN_NAME)
   - Which architecture to use
   - Which search strategy to use
   - Where the dataset lives
   - Hardware settings
 
 All other settings (parameter ranges, stopping conditions, quality weights,
-parallelism, etc.) are in YAML files under configs/. This keeps the entry
-point clean and focused on choices, not on numeric knobs.
+parallelism, etc.) are in YAML files under configs/.
 
-================================================================================
- BEFORE FIRST RUN - do these once:
-================================================================================
-
-  Step 1 - Install dependencies:
-      pip install -r requirements.txt
-
-  Step 2 - Prepare your dataset:
-      * For DATASET_MODE="local":
-          Place your CSV at Data/Data-Set.csv (or edit LOCAL_DATASET_PATH).
-          On first run, the system auto-splits into Train_set / Val_set / Test_set.
-      * For DATASET_MODE="imported":
-          Nothing to do - the dataset downloads automatically.
-
-  Step 3 - Review the YAML configs:
-      * configs/architectures/<ARCHITECTURE>.yaml -  parameter ranges & methods.
-      * configs/strategies/<SEARCH_STRATEGY>.yaml - stopping, scoring, parallelism.
-
-  Step 4 - Run:
-      python main.py
-
-  Results land in experiments/<timestamp>_<arch>_<strategy>/ :
-      - report.txt       : full trial-by-trial log
-      - best_trial.png   : plot of the best trial's learning curves
+For a step-by-step setup walkthrough, see SETUP_GUIDE.md.
 ================================================================================
 """
+
+# ==============================================================================
+#                              RUN IDENTITY
+# ==============================================================================
+
+# RUN_NAME
+# --------
+# A short label for this run. Used as a prefix in the output folder name so
+# multiple runs (different datasets / tasks) can coexist without overwriting.
+# Examples: "experiment1", "iris_class", "customer_churn_v2"
+RUN_NAME = "experiment1"
+
 
 # ==============================================================================
 #                           TOP-LEVEL SELECTIONS
@@ -81,7 +70,7 @@ DATASET_MODE = "local"
 
 # --- Local mode settings ---
 
-# Path to the dataset. For tabular/text: a CSV file. For images: an ImageFolder.
+# Path to the dataset. Tabular: .csv / .npy / .parquet. Images: ImageFolder dir.
 LOCAL_DATASET_PATH = "./Data/Data-Set.csv"
 
 # Type of data (determines which data loader runs).
@@ -95,11 +84,11 @@ FEATURE_COLUMNS = None
 LABEL_COLUMN = None
 
 # Data split percentages. Must sum to 1.0.
-# On the first run, the system creates:
-#   Data/Train_set.csv (train_pct of the data)
-#   Data/Val_set.csv   (val_pct of the data - used inside the tuning loop)
-#   Data/Test_set.csv  (test_pct - held out, not used during tuning)
-# Subsequent runs reuse these files for reproducibility. To re-split, delete them.
+# For LOCAL or imported datasets without a built-in split:
+#   Train, Val, and Test sets are created from these percentages.
+# For imported datasets WITH a built-in test set (MNIST, CIFAR, ...):
+#   The built-in test set is preserved.
+#   TRAIN_PCT:VAL_PCT becomes the ratio for splitting the original train set.
 TRAIN_PCT = 0.6
 VAL_PCT   = 0.2
 TEST_PCT  = 0.2
@@ -150,8 +139,8 @@ from core.run_config import RunConfig
 
 
 def build_run_config() -> RunConfig:
-    """Bundle the user's top-level choices into a RunConfig."""
     return RunConfig(
+        run_name=RUN_NAME,
         architecture=ARCHITECTURE,
         search_strategy=SEARCH_STRATEGY,
         task_type=TASK_TYPE,

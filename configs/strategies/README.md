@@ -65,6 +65,38 @@ stopping:
   convergence_patience: 40      # null = disabled
 ```
 
+| Condition | Type | Range | What it does | How to disable |
+|---|---|---|---|---|
+| `max_trials` | int | 1+ | Hard cap on the number of trials. | `null` |
+| `time_limit_minutes` | int / float | 1+ minutes | Wall-clock budget across the full run. | `null` |
+| `target_accuracy` | float | 0.0 - 1.0 | Stops when **smoothed** val accuracy ≥ value (raw spikes don't trigger it). | `null` |
+| `convergence_patience` | int | 5 - 200 | Stops after N consecutive trials with no `quality_score` improvement. | `null` |
+
+**Examples:**
+
+```yaml
+# Quick prototype: stop after 30 trials or 15 minutes
+stopping:
+  max_trials: 30
+  time_limit_minutes: 15
+  target_accuracy: null
+  convergence_patience: 10
+
+# Stop at known target accuracy
+stopping:
+  max_trials: 100
+  time_limit_minutes: null
+  target_accuracy: 0.95
+  convergence_patience: 30
+
+# Production run - large budget + only stop on plateau
+stopping:
+  max_trials: 500
+  time_limit_minutes: null
+  target_accuracy: null
+  convergence_patience: 80
+```
+
 ### `execution`
 
 ```yaml
@@ -128,3 +160,39 @@ grid_points: 3
 | Large search space, many choices | **FTTS** or **Bayesian** |
 
 **FTTS is the default for a reason** — it runs out-of-the-box without extra dependencies, produces a fully-annotated report explaining every decision, and performs well across a wide range of tasks.
+
+---
+
+## 🏆 ranking_metric — How the Final Best Trial Is Picked
+
+Available in all three strategies' `scoring` section:
+
+```yaml
+scoring:
+  ranking_metric: "quality_score"   # quality_score | smoothed_accuracy | raw_accuracy
+```
+
+| Value | What it picks | When to use |
+|---|---|---|
+| `quality_score` | Composite (best metric + stability + speed + gap) | **Default — recommended for production.** Picks stable, well-generalizing models. |
+| `smoothed_accuracy` | Raw smoothed val accuracy | Benchmarks where you want the highest accuracy regardless of stability. |
+| `raw_accuracy` | Peak single-epoch accuracy | Not recommended — sensitive to spikes. |
+
+> ⚠️ **Important:** FTTS *always* uses `quality_score` internally to guide the tree search and the priority queue, regardless of `ranking_metric`. This parameter only changes which trial is reported as "best" at the end. See [`search_strategies/README.md`](../../search_strategies/README.md) for details on the FTTS algorithm.
+
+The `ranking_metric` value is also encoded into the output folder name (`<run>_<strategy>_<dataset>_<ranking>/`) so different choices don't overwrite each other.
+
+---
+
+## 🎯 target_accuracy — Stopping When Good Enough
+
+Inside `stopping`:
+
+```yaml
+stopping:
+  target_accuracy: 0.90  # stop when smoothed val accuracy >= 0.90
+```
+
+The comparison is against the **smoothed** val accuracy (averaged over the last `smoothing_window` epochs), not raw. This avoids stopping on a single-epoch spike.
+
+To disable, set to `null`.

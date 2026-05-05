@@ -7,27 +7,30 @@ import torch.nn as nn
 
 
 class _SequenceClassifier(nn.Module):
-    """עטיפה משותפת ל-RNN/LSTM - לוקחת את hidden state האחרון לסיווג."""
+    """Wrapper shared by RNN/LSTM - takes the last hidden state for classification."""
 
     def __init__(self, rnn: nn.Module, embedding: nn.Module | None,
                  hidden_size: int, output_dim: int, dropout: float,
-                 bidirectional: bool):
+                 bidirectional: bool, embedding_dropout: float = 0.0):
         super().__init__()
         self.embedding = embedding
+        self.embedding_dropout = (
+            nn.Dropout(embedding_dropout) if embedding_dropout > 0 else nn.Identity()
+        )
         self.rnn = rnn
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         direction_mult = 2 if bidirectional else 1
         self.head = nn.Linear(hidden_size * direction_mult, output_dim)
 
     def forward(self, x):
-        # x: (B, T) לטקסט (token ids) או (B, T, F) לסדרות numeric.
+        # x: (B, T) for token-id text or (B, T, F) for numeric sequences
         if self.embedding is not None:
-            x = self.embedding(x)  # (B, T, E)
-        # הוודא מימד batch-first
+            x = self.embedding(x)
+            x = self.embedding_dropout(x)
         if x.dim() == 2:
-            x = x.unsqueeze(-1)  # (B, T, 1) - סדרה של סקלרים
-        output, _ = self.rnn(x)  # output: (B, T, H*dir)
-        last = output[:, -1, :]  # לקיחת ה-timestep האחרון
+            x = x.unsqueeze(-1)
+        output, _ = self.rnn(x)
+        last = output[:, -1, :]
         return self.head(self.dropout(last))
 
 
@@ -62,5 +65,6 @@ def build_rnn(hp: dict, data_info: dict) -> nn.Module:
         nonlinearity="tanh",
     )
     return _SequenceClassifier(
-        rnn, embedding, hidden_size, output_dim, dropout_p, bidirectional
+        rnn, embedding, hidden_size, output_dim, dropout_p, bidirectional,
+        embedding_dropout=float(hp.get("embedding_dropout", 0.0))
     )

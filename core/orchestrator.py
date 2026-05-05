@@ -51,16 +51,7 @@ class Orchestrator:
         self.cfg = cfg
         self._set_seeds()
 
-        # Output directory (unique per run)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_name = f"{timestamp}_{cfg.architecture}_{cfg.search_strategy}"
-        self.run_dir = Path(cfg.experiments_root) / run_name
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-
-        self.report_path = self.run_dir / "report.txt"
-        self.best_plot_path = self.run_dir / "best_trial.png"
-
-        # Load configs
+        # Load configs (need ranking_metric before naming the folder)
         self.cm = ConfigManager(cfg.architecture)
         self.strategy_cfg = load_strategy_config(cfg.search_strategy)
 
@@ -70,6 +61,22 @@ class Orchestrator:
         profile = scoring_cfg.get("profile", "balanced")
         custom_weights = scoring_cfg.get("custom_weights")
         self.quality_weights = resolve_weights(profile, custom_weights)
+        self.ranking_metric = scoring_cfg.get("ranking_metric", "quality_score")
+
+        # Output directory:
+        # <RUN_NAME>_<strategy>_<dataset>_<ranking>/
+        #   tuning/    : tuning artifacts (report.txt, best_trial.png)
+        #   final/     : final-phase artifacts (model.py, test_evaluation.txt)
+        ranking_short = self.ranking_metric.replace("_", "")
+        folder_name = f"{cfg.run_name}_{cfg.search_strategy}_{cfg.dataset_label()}_{ranking_short}"
+        self.run_dir = Path(cfg.experiments_root) / folder_name
+        self.tuning_dir = self.run_dir / "tuning"
+        self.final_dir = self.run_dir / "final"
+        self.tuning_dir.mkdir(parents=True, exist_ok=True)
+        self.final_dir.mkdir(parents=True, exist_ok=True)
+
+        self.report_path = self.tuning_dir / "report.txt"
+        self.best_plot_path = self.tuning_dir / "best_trial.png"
 
         # Stopping conditions (all optional; at least one must be set)
         stopping = self.strategy_cfg.get("stopping", {}) or {}
@@ -132,6 +139,15 @@ class Orchestrator:
             print(f"\n[orchestrator] {self.stop_reason}")
 
         self._finalize()
+
+        # Final Test Evaluation phase: refit on Train+Val, evaluate on Test,
+        # generate model.py with all the deliverables.
+        try:
+            self._run_final_phase()
+        except Exception as exc:
+            print(f"[orchestrator] [WARN] Final phase failed: {exc}")
+            print(f"[orchestrator]        Tuning artifacts in {self.tuning_dir} are still valid.")
+
         return self._summary()
 
     # ========================================================= FTTS runner
@@ -209,8 +225,13 @@ class Orchestrator:
         """Build model, train, analyze, score, report, plot, update stats."""
         try:
             model = build_model(self.cfg.architecture, hp, self.data_info)
-            epochs_param = self.cm.get_param("epochs")
-            epochs = int(epochs_param["initial_value"]) if epochs_param else 30
+            # Prefer hp value (allows future actions to tune epochs);
+            # fall back to YAML initial_value, then 30.
+            if "epochs" in hp:
+                epochs = int(hp["epochs"])
+            else:
+                epochs_param = self.cm.get_param("epochs")
+                epochs = int(epochs_param["initial_value"]) if epochs_param else 30
 
             es_param = self.cm.get_param("early_stopping")
             patience = None
@@ -288,12 +309,25 @@ class Orchestrator:
             parent_id=parent_id,
         )
 
-        # Console log
-        tag = "✓ NEW BEST" if improved else "  "
+        # Console log: result + verdict + child action count
+        tag = "[NEW BEST]" if improved else ""
         raw_str = (f"raw={result.raw_best_metric:.4f} "
                    f"smooth={result.best_metric:.4f}") if result.val_metric_curve else "no-metrics"
+        verdict_str = diagnosis.verdict if diagnosis else "?"
+        n_actions = len(diagnosis.actions) if diagnosis else 0
+        parent_str = f"<- {parent_id}" if parent_id else "(root)"
         print(f"[{trial_id}] {result.status:<14} {raw_str} "
-              f"quality={quality:.4f} {tag}")
+              f"quality={quality:.4f} verdict={verdict_str} "
+              f"children={n_actions} {parent_str} {tag}")
+
+        # Show top 3 proposed children (what FTTS will likely explore next)
+        if diagnosis and diagnosis.actions and self.cfg.search_strategy == "ftts":
+            top_actions = sorted(diagnosis.actions,
+                                  key=lambda a: a.priority, reverse=True)[:3]
+            for a in top_actions:
+                expected_score = quality * a.priority if quality > 0 else a.priority
+                print(f"[{trial_id}]   -> proposed: {a.type:<30} "
+                      f"priority={a.priority:.2f} expected={expected_score:.3f}")
 
         if return_artifacts:
             return result, diagnosis, breakdown
@@ -346,7 +380,7 @@ class Orchestrator:
     def _warn_if_unsafe_parallelism(self):
         """Warn if GPU + threads > 1."""
         if self.max_parallel > 1 and self.cfg.device.startswith("cuda"):
-            print(f"[orchestrator] ⚠️  Warning: max_parallel_experiments="
+            print(f"[orchestrator] [WARN] max_parallel_experiments="
                   f"{self.max_parallel} with GPU device. Multiple trials will "
                   f"share one GPU, likely hurting throughput. Prefer 1 for GPU runs.")
 
@@ -379,3 +413,34 @@ class Orchestrator:
             "stop_reason": self.stop_reason or "All conditions satisfied.",
             "results_dir": str(self.run_dir),
         }
+
+    # ================================================= final phase
+
+    def _run_final_phase(self):
+        """
+        After tuning is done, build the final model with the best hyperparameters,
+        train it on Train+Val combined, evaluate on Test_set, and generate model.py.
+        """
+        if self.best_result is None:
+            print("[orchestrator] [WARN] No successful trial - skipping final phase.")
+            return
+
+        print(f"\n[orchestrator] === Final Phase ===")
+        print(f"[orchestrator] Best trial: {self.best_trial_id}")
+        print(f"[orchestrator] Refitting on Train+Val and evaluating on Test...")
+
+        from core.final_trainer import run_final_phase
+        run_final_phase(
+            cfg=self.cfg,
+            best_hp=self.best_result.hyperparameters,
+            best_quality=self.best_quality,
+            best_metric_raw=self.best_result.raw_best_metric,
+            best_metric_smoothed=self.best_result.best_metric,
+            data_info=self.data_info,
+            cm=self.cm,
+            total_trials=self.trial_counter,
+            final_dir=self.final_dir,
+            ranking_metric=self.ranking_metric,
+            quality_weights=self.quality_weights,
+            smoothing_window=self.smoothing_window,
+        )

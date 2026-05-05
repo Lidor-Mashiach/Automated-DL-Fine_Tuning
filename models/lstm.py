@@ -34,5 +34,6 @@ def build_lstm(hp: dict, data_info: dict) -> nn.Module:
         dropout=rnn_dropout,
     )
     return _SequenceClassifier(
-        lstm, embedding, hidden_size, output_dim, dropout_p, bidirectional
+        lstm, embedding, hidden_size, output_dim, dropout_p, bidirectional,
+        embedding_dropout=float(hp.get("embedding_dropout", 0.0))
     )

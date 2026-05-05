@@ -124,3 +124,10 @@ Because both artifacts are written live:
 - ✅ You can inspect what happened, then either accept the partial result or re-run.
 
 Future versions will support **full resume** (reconstructing the ExperimentTree from disk) — see `FUTURE_WORK.md`.
+
+---
+
+## 🔗 Related Documents
+
+- [`README.md`](../README.md) — output folder structure
+- [`core/README.md`](../core/README.md) — Final Refit & Test Evaluation phase

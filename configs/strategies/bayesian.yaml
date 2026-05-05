@@ -17,6 +17,7 @@ scoring:
   smoothing_window: 5
   profile: "balanced"
   custom_weights: null
+  ranking_metric: "quality_score"   # quality_score | smoothed_accuracy | raw_accuracy
 
 
 # =============================================================================

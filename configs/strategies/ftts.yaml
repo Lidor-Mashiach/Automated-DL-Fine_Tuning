@@ -52,6 +52,17 @@ scoring:
   #     convergence_speed: 0.1
   #     generalization_gap: 0.1
 
+  # ranking_metric
+  # --------------
+  # How to choose the FINAL "best trial" (the one written to model.py).
+  # FTTS still uses quality_score INTERNALLY to guide the tree search - this
+  # parameter only changes which trial is reported as best at the end.
+  #
+  #   "quality_score"     : composite score (default - recommended for production).
+  #   "smoothed_accuracy" : raw smoothed val accuracy (good for benchmarks).
+  #   "raw_accuracy"      : peak single-epoch accuracy (NOT recommended - prone to spikes).
+  ranking_metric: "quality_score"
+
 
 # =============================================================================
 # stopping - when to stop the run

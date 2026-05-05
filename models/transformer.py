@@ -27,8 +27,43 @@ class _PositionalEncoding(nn.Module):
         return x + self.pe[:, : x.size(1)]
 
 
+class _DropPath(nn.Module):
+    """Stochastic depth: randomly drop entire residual paths during training.
+
+    Used to wrap each transformer encoder layer. When the path is "dropped",
+    the input passes through unchanged (identity skip).
+    """
+
+    def __init__(self, layer: nn.Module, drop_prob: float = 0.0):
+        super().__init__()
+        self.layer = layer
+        self.drop_prob = float(drop_prob)
+
+    def forward(self, x, *args, **kwargs):
+        if self.training and self.drop_prob > 0:
+            if torch.rand(1).item() < self.drop_prob:
+                # Drop the path: return input unchanged
+                return x
+        return self.layer(x, *args, **kwargs)
+
+
+class _StochasticDepthEncoder(nn.Module):
+    """Stack of transformer encoder layers, each wrapped in DropPath.
+    Replacement for nn.TransformerEncoder when stochastic depth is active.
+    """
+
+    def __init__(self, wrapped_layers):
+        super().__init__()
+        self.layers = nn.ModuleList(wrapped_layers)
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+
 class _TransformerClassifier(nn.Module):
-    """Transformer encoder + mean pooling + לינארי פלט."""
+    """Transformer encoder + mean pooling + linear output head."""
 
     def __init__(
         self,
@@ -38,25 +73,27 @@ class _TransformerClassifier(nn.Module):
         d_model: int,
         output_dim: int,
         dropout: float,
+        embedding_dropout: float = 0.0,
     ):
         super().__init__()
         self.input_projection = input_projection
+        self.embedding_dropout = (
+            nn.Dropout(embedding_dropout) if embedding_dropout > 0 else nn.Identity()
+        )
         self.pos_encoding = pos_encoding
         self.encoder = encoder
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.head = nn.Linear(d_model, output_dim)
 
     def forward(self, x):
-        # x: (B, T) לטקסט (ids) או (B, T, F) לסדרות numeric.
         if x.dim() == 2:
-            # token ids -> embedding
-            x = self.input_projection(x)  # (B, T, d_model)
-        else:
-            # projection לינארית למימד d_model
             x = self.input_projection(x)
+        else:
+            x = self.input_projection(x)
+        x = self.embedding_dropout(x)
         x = self.pos_encoding(x)
-        x = self.encoder(x)         # (B, T, d_model)
-        x = x.mean(dim=1)           # mean pooling על ציר הזמן
+        x = self.encoder(x)
+        x = x.mean(dim=1)
         return self.head(self.dropout(x))
 
 
@@ -96,13 +133,27 @@ def build_transformer(hp: dict, data_info: dict) -> nn.Module:
         activation=activation,
         batch_first=True,
     )
-    # הערה: attention_dropout לא חשוף בנפרד ב-TransformerEncoderLayer של torch;
-    # הוא משוקלל ב-dropout הכללי. עדיין שמרנו את הפרמטר לעתיד/מימוש מותאם.
-    _ = attn_dropout
+    _ = attn_dropout  # not exposed separately by torch's encoder layer
 
-    encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+    # Stochastic depth: only meaningful for deep transformers (>= 4 layers).
+    # Wrap each encoder layer with a DropPath that randomly skips it.
+    stoch_depth = float(hp.get("stochastic_depth", 0.0))
+    if stoch_depth > 0 and num_layers >= 4:
+        # Build encoder layers manually so we can wrap them
+        from copy import deepcopy
+        layers = []
+        for i in range(num_layers):
+            # Linear scaling: deeper layers get higher drop prob
+            layer_drop = stoch_depth * (i / max(1, num_layers - 1))
+            wrapped = _DropPath(deepcopy(encoder_layer), drop_prob=layer_drop)
+            layers.append(wrapped)
+        encoder = _StochasticDepthEncoder(layers)
+    else:
+        encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
     pos = _PositionalEncoding(d_model)
 
     return _TransformerClassifier(
-        input_projection, encoder, pos, d_model, output_dim, dropout_p
+        input_projection, encoder, pos, d_model, output_dim, dropout_p,
+        embedding_dropout=float(hp.get("embedding_dropout", 0.0))
     )

@@ -88,3 +88,51 @@ To support a new imported dataset:
 3. Document it in `main.py`'s `IMPORTED_DATASET_NAME` docstring.
 
 To support a new local format, extend `local_loader.py` with a new `_load_<type>` branch.
+
+---
+
+## 🗂️ Local Tabular - Supported Formats
+
+Local tabular data can be supplied as:
+
+| Format | Extension | Notes |
+|---|---|---|
+| CSV | `.csv` | First row = headers. Last column = label by default. |
+| NumPy | `.npy` | 2-D array. Last column = label. Auto-named columns. |
+| Parquet | `.parquet` | Column-oriented. Pandas-readable. |
+
+The first run creates `Train_set.csv`, `Val_set.csv`, `Test_set.csv` inside a per-dataset sub-folder named `Data/<filename>_split/` to avoid collisions when running multiple datasets in parallel.
+
+---
+
+## ⚖️ Class Imbalance Detection
+
+For classification tasks, the loader computes `imbalance_ratio = max(class_counts) / min(class_counts)` and prints it to the console. This ratio is also passed to the trainer, which uses it (along with `loss_function: "auto"`) to pick Focal Loss or Cross-Entropy automatically. See [`core/README.md`](../core/README.md) for the loss-selection table.
+
+---
+
+## 🔢 Tabular Normalization Methods
+
+Available via the `normalization` parameter in `configs/architectures/mlp.yaml`:
+
+| Method | Formula | Best for | Sensitive to outliers? |
+|---|---|---|---|
+| `none` | x (no change) | Pre-normalized data | — |
+| `standardize` | `(x - mean) / std` | Most tabular data | Moderately |
+| `min_max` | `(x - min) / (max - min)` → `[0, 1]` | Bounded features | Very |
+| `max_abs` | `x / max(\|x\|)` → `[-1, 1]` | Sparse data (preserves zeros) | Moderately |
+
+Statistics are fit on the **train set only** to avoid data leakage.
+
+---
+
+## 🌐 Imported Datasets - Split Handling
+
+Different imported datasets have different built-in splits:
+
+| Dataset | Built-in split | How TRAIN_PCT/VAL_PCT/TEST_PCT are used |
+|---|---|---|
+| MNIST, FashionMNIST, CIFAR-10, CIFAR-100 | Train + Test | Test = original test set. Train+Val = original train set, split using TRAIN_PCT:VAL_PCT ratio. TEST_PCT ignored. |
+| Iris, Wine, Breast Cancer, Digits | None | All three percentages used; must sum to 1.0. |
+
+The console output explains exactly what was done in each run.

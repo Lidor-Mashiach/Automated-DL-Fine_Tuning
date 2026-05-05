@@ -77,7 +77,7 @@ methods:
 
 optimization:
 
-  name:
+  optimizer_name:
     enabled: true
     initial_value: "adam"
     choices: ["adam", "adamw", "rmsprop"]
@@ -115,3 +115,105 @@ training:
   sequence_length:
     enabled: true
     initial_value: 128
+
+  # loss_function - see configs/architectures/mlp.yaml for full docs
+  loss_function:
+    enabled: true
+    initial_value: "auto"
+    choices: ["auto", "cross_entropy", "focal", "mse"]
+
+  # focal_gamma - see mlp.yaml. Used only when loss_function=focal.
+  focal_gamma:
+    enabled: true
+    initial_value: 2.0
+    range: [0.5, 5.0]
+
+  # num_workers - see mlp.yaml.
+  num_workers:
+    enabled: true
+    initial_value: 2
+    range: [0, 8]
+
+  # text_augmentation
+  # -----------------
+  # Augmentation strategy for sequence/text data (training set only):
+  #   none         : no augmentation
+  #   token_dropout: randomly mask tokens with prob `text_augmentation_prob`
+  #                  Acts as word-level dropout. Strongest regularizer.
+  #   word_shuffle : shuffle tokens within tiny windows of size 3.
+  #                  Mild perturbation; preserves locality.
+  #   ngram_shuffle: shuffle n-grams (size 2-3) across the sequence.
+  #                  Stronger structural perturbation; breaks long-range order.
+  text_augmentation:
+    enabled: true
+    initial_value: "none"
+    choices: ["none", "token_dropout", "word_shuffle", "ngram_shuffle"]
+
+  # text_augmentation_prob
+  # ----------------------
+  # Probability for token-level mask/shuffle when text_augmentation is active.
+  text_augmentation_prob:
+    enabled: true
+    initial_value: 0.1
+    range: [0.0, 0.3]
+
+
+  # gradient_accumulation_steps
+  # ---------------------------
+  # Accumulate gradients over N batches before stepping the optimizer.
+  # Effective batch size = batch_size * gradient_accumulation_steps.
+  # Use this to simulate large batches when GPU memory is limited.
+  #   1 = no accumulation (default, single step per batch).
+  #   2-8 = accumulate; useful when you want batch_size=256 but only RAM for 32.
+  gradient_accumulation_steps:
+    enabled: true
+    initial_value: 1
+    range: [1, 8]
+
+  # mixed_precision
+  # ---------------
+  # Use fp16 (half precision) on GPU to roughly double training speed and
+  # halve VRAM usage. Has no effect on CPU.
+  #   true  : enables torch.cuda.amp autocast + GradScaler.
+  #   false : standard fp32 training (default - safest).
+  mixed_precision:
+    enabled: true
+    initial_value: false
+    choices: [true, false]
+
+  # embedding_dropout
+  # -----------------
+  # Dropout applied to the embedding layer output before feeding it to the RNN/Transformer.
+  # Different from `dropout` (which acts inside the recurrent layers).
+  # Useful regularization technique specific to NLP architectures.
+  #   0.0  : no embedding dropout (default).
+  #   0.1-0.3: typical range; helps prevent the embedding lookup from overfitting.
+  embedding_dropout:
+    enabled: true
+    initial_value: 0.0
+    range: [0.0, 0.4]
+
+
+# =============================================================================
+# Advanced optimizer parameters (disabled by default - for expert tuning)
+# =============================================================================
+
+  # adam_beta1
+  # ----------
+  # First moment decay rate for Adam/AdamW. Disabled by default.
+  # Standard value 0.9 is optimal for ~99% of tasks. Lower (0.85) sometimes
+  # helps very large batch training. Enable only if you know what you're doing.
+  adam_beta1:
+    enabled: false
+    initial_value: 0.9
+    range: [0.85, 0.95]
+
+  # adam_beta2
+  # ----------
+  # Second moment decay rate for Adam/AdamW. Disabled by default.
+  # Standard value 0.999 is optimal for ~99% of tasks. Some recipes (GPT-style)
+  # use 0.95 for very large models. Enable only if you know what you're doing.
+  adam_beta2:
+    enabled: false
+    initial_value: 0.999
+    range: [0.9, 0.9999]

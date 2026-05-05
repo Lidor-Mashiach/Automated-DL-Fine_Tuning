@@ -26,23 +26,42 @@ ACTION_TYPES = {
     # regularization
     "increase_dropout", "decrease_dropout",
     "increase_weight_decay", "decrease_weight_decay",
-    "add_label_smoothing",
     # capacity
     "add_depth", "reduce_depth",
     "add_width", "reduce_width",
-    "change_layer_shape",
+    # layer shape - one action per pattern (context-aware proposals)
+    "try_layer_shape_uniform", "try_layer_shape_funnel",
+    "try_layer_shape_pyramid", "try_layer_shape_hourglass",
+    "try_layer_shape_bottleneck",
     # activation / optimizer
     "change_activation", "change_optimizer",
     # stability
     "add_gradient_clipping", "enable_batch_norm",
-    "enable_early_stopping", "add_lr_scheduler", "add_warmup",
+    "enable_label_smoothing", "add_lr_scheduler", "increase_warmup",
     # data / batch
-    "increase_augmentation", "add_mixup",
+    "increase_augmentation", "enable_mixup",
     "reduce_batch_size", "increase_batch_size",
     # recurrent
     "toggle_bidirectional",
     # transformer
-    "increase_attention_dropout",
+    "adjust_attention_dropout",
+    # loss function (new)
+    "try_focal_loss", "try_cross_entropy",
+    "increase_focal_gamma", "decrease_focal_gamma",
+    # normalization (new)
+    "change_normalization",
+    # text augmentation (new)
+    "increase_text_augmentation", "change_text_augmentation",
+    # gradient accumulation + mixed precision (new)
+    "increase_grad_accumulation", "enable_mixed_precision",
+    # embedding dropout (NLP)
+    "increase_embedding_dropout",
+    # advanced image augmentation
+    "enable_cutout", "enable_cutmix",
+    # advanced regularization for deep transformers
+    "increase_stochastic_depth",
+    # adam betas (advanced; used only when explicitly enabled in YAML)
+    "adjust_adam_beta1", "adjust_adam_beta2",
 }
 
 
@@ -101,6 +120,136 @@ def _is_tunable(cm, name: str) -> bool:
 def _is_enabled(cm, name: str) -> bool:
     """Just enabled."""
     return cm.get_param(name) is not None
+
+
+def _current_value_safe(cm, name: str):
+    """Return the param's initial_value if defined, else None."""
+    p = cm.get_param(name)
+    if p is None:
+        return None
+    return p.get("initial_value")
+
+
+def _propose_layer_shapes(diag: "Diagnosis", cm, verdict: str,
+                          input_dim: int | None = None,
+                          output_dim: int | None = None,
+                          current_shape: str | None = None) -> None:
+    """
+    Context-aware layer-shape suggestions.
+
+    Strategy: pick 1-2 patterns most likely to help based on the verdict,
+    plus light input/output-dim hints. Each suggestion gets a priority
+    that reflects how confident we are it matches the situation.
+
+    Doesn't propose the current shape (would be a no-op).
+    """
+    if not _is_tunable(cm, "layer_shape"):
+        return
+
+    p = cm.get_param("layer_shape")
+    available = set(p.get("choices", []))
+
+    # Default: empty proposal list, we add per-verdict
+    suggestions: list[tuple[str, str, float]] = []  # (action, reason, priority)
+
+    if verdict == "overfit":
+        # Overfit -> compress information, force the network to learn smarter
+        # representations. Bottleneck and funnel both compress.
+        if "bottleneck" in available:
+            suggestions.append((
+                "try_layer_shape_bottleneck",
+                "Bottleneck shape forces information compression - "
+                "strong implicit regularizer for overfitting models.",
+                0.55,
+            ))
+        if "funnel" in available:
+            suggestions.append((
+                "try_layer_shape_funnel",
+                "Funnel shape gradually compresses; reduces effective "
+                "capacity per layer and helps with overfitting.",
+                0.40,
+            ))
+
+    elif verdict == "failed_to_learn":
+        # Underfit -> need more capacity in the middle, where features are
+        # mixed. Hourglass widens in the middle.
+        if "hourglass" in available:
+            suggestions.append((
+                "try_layer_shape_hourglass",
+                "Hourglass widens in the middle - extra capacity for "
+                "feature mixing, helps when the model can't learn.",
+                0.55,
+            ))
+        if "uniform" in available:
+            suggestions.append((
+                "try_layer_shape_uniform",
+                "Uniform width keeps full capacity in every layer; "
+                "safest choice when the model is underfitting.",
+                0.40,
+            ))
+
+    elif verdict == "slow":
+        # Slow training -> compression upstream may speed up by reducing
+        # parameters in deeper layers.
+        if "funnel" in available:
+            suggestions.append((
+                "try_layer_shape_funnel",
+                "Funnel reduces parameters in deeper layers - may "
+                "accelerate slow convergence.",
+                0.45,
+            ))
+
+    elif verdict == "healthy":
+        # Already healthy -> exploration suggestions only, lower priorities.
+        if "bottleneck" in available:
+            suggestions.append((
+                "try_layer_shape_bottleneck",
+                "Exploration: bottleneck may improve generalization further.",
+                0.30,
+            ))
+        if "pyramid" in available:
+            suggestions.append((
+                "try_layer_shape_pyramid",
+                "Exploration: pyramid expansion may capture richer features.",
+                0.25,
+            ))
+
+    # Bonus: input/output-dim hints can boost certain shapes regardless of verdict
+    if (input_dim is not None and output_dim is not None
+            and input_dim >= output_dim * 4
+            and "funnel" in available
+            and current_shape != "funnel"):
+        # High-dim input, low-dim output -> funnel is natural
+        suggestions.append((
+            "try_layer_shape_funnel",
+            f"input_dim={input_dim} >> output_dim={output_dim}; "
+            "funnel matches this dimensional collapse naturally.",
+            0.50,
+        ))
+
+    # Skip suggestions that match the current shape (would be no-op)
+    shape_to_action = {
+        "uniform": "try_layer_shape_uniform",
+        "funnel": "try_layer_shape_funnel",
+        "pyramid": "try_layer_shape_pyramid",
+        "hourglass": "try_layer_shape_hourglass",
+        "bottleneck": "try_layer_shape_bottleneck",
+    }
+    skip_action = shape_to_action.get(current_shape)
+
+    seen = set()
+    for action_type, reason, priority in suggestions:
+        if action_type == skip_action:
+            continue
+        if action_type in seen:
+            continue
+        seen.add(action_type)
+        diag.actions.append(Action(
+            type=action_type,
+            reason=reason,
+            target_param="layer_shape",
+            priority=priority,
+        ))
 
 
 # ------------------------------------------------- main entry
@@ -262,13 +411,16 @@ def _add_failed_to_learn(diag: Diagnosis, cm):
             target_param="activation",
             suggested_value="gelu", priority=0.45,
         ))
-    if _is_tunable(cm, "name"):
+    if _is_tunable(cm, "optimizer_name"):
         diag.actions.append(Action(
             type="change_optimizer",
             reason="AdamW may unlock learning.",
-            target_param="name",
+            target_param="optimizer_name",
             suggested_value="adamw", priority=0.35,
         ))
+    # Context-aware layer-shape suggestions
+    _propose_layer_shapes(diag, cm, verdict="failed_to_learn",
+                           current_shape=_current_value_safe(cm, "layer_shape"))
 
 
 def _add_overfit(diag: Diagnosis, cm):
@@ -293,13 +445,13 @@ def _add_overfit(diag: Diagnosis, cm):
         ))
     if _is_enabled(cm, "mixup"):
         diag.actions.append(Action(
-            type="add_mixup",
+            type="enable_mixup",
             reason="Mixup prevents memorization.",
             target_param="mixup", priority=0.6,
         ))
     if _is_enabled(cm, "label_smoothing"):
         diag.actions.append(Action(
-            type="add_label_smoothing",
+            type="enable_label_smoothing",
             reason="Label smoothing prevents overconfidence.",
             target_param="label_smoothing",
             suggested_value=0.1, priority=0.55,
@@ -308,6 +460,60 @@ def _add_overfit(diag: Diagnosis, cm):
         diag.actions.append(Action(
             type="reduce_width",
             reason="Smaller model generalizes better.", priority=0.4,
+        ))
+    # Context-aware layer-shape suggestions
+    _propose_layer_shapes(diag, cm, verdict="overfit",
+                           current_shape=_current_value_safe(cm, "layer_shape"))
+    # Loss-function variation: low priority, only if loss_function is tunable
+    if _is_tunable(cm, "loss_function"):
+        diag.actions.append(Action(
+            type="try_focal_loss",
+            reason="Focal loss focuses on hard examples; may help if class imbalance present.",
+            target_param="loss_function",
+            suggested_value="focal", priority=0.25,
+        ))
+    if _is_tunable(cm, "text_augmentation"):
+        diag.actions.append(Action(
+            type="change_text_augmentation",
+            reason="Stronger text augmentation regularizes overfitting.",
+            target_param="text_augmentation", priority=0.45,
+        ))
+        diag.actions.append(Action(
+            type="increase_text_augmentation",
+            reason="Increase text augmentation probability to reduce overfitting.",
+            target_param="text_augmentation_prob", priority=0.40,
+        ))
+    # Embedding dropout for NLP architectures
+    if _is_tunable(cm, "embedding_dropout"):
+        diag.actions.append(Action(
+            type="increase_embedding_dropout",
+            reason="Embedding dropout regularizes the lookup layer; effective for NLP overfitting.",
+            target_param="embedding_dropout", priority=0.50,
+        ))
+    # Advanced image augmentation (CNN only)
+    if _is_tunable(cm, "cutout"):
+        diag.actions.append(Action(
+            type="enable_cutout",
+            reason="Cutout masks random patches; strong spatial regularizer.",
+            target_param="cutout",
+            suggested_value=0.25, priority=0.55,
+        ))
+    if _is_tunable(cm, "cutmix"):
+        diag.actions.append(Action(
+            type="enable_cutmix",
+            reason="CutMix blends labeled patches across images; effective for image overfit.",
+            target_param="cutmix",
+            suggested_value=1.0, priority=0.50,
+        ))
+    # Stochastic depth for deep transformers (gated by depth check below)
+    current_depth = _current_value_safe(cm, "num_encoder_layers")
+    if (_is_tunable(cm, "stochastic_depth")
+            and current_depth is not None and current_depth >= 4):
+        diag.actions.append(Action(
+            type="increase_stochastic_depth",
+            reason=(f"Network is deep (num_encoder_layers={current_depth}); "
+                    "stochastic depth helps regularize without losing capacity."),
+            target_param="stochastic_depth", priority=0.55,
         ))
 
 
@@ -329,13 +535,30 @@ def _add_slow(diag: Diagnosis, cm):
             type="add_width",
             reason="More capacity may help.", priority=0.55,
         ))
-    if _is_tunable(cm, "name"):
+    if _is_tunable(cm, "optimizer_name"):
         diag.actions.append(Action(
             type="change_optimizer",
             reason="Try a different optimizer.",
-            target_param="name",
+            target_param="optimizer_name",
             suggested_value="adamw", priority=0.3,
         ))
+    # Performance speedups (system-level optimizations)
+    if _is_tunable(cm, "mixed_precision"):
+        diag.actions.append(Action(
+            type="enable_mixed_precision",
+            reason="Mixed precision (fp16) speeds up training on GPU.",
+            target_param="mixed_precision",
+            suggested_value=True, priority=0.50,
+        ))
+    if _is_tunable(cm, "gradient_accumulation_steps"):
+        diag.actions.append(Action(
+            type="increase_grad_accumulation",
+            reason="Larger effective batch may stabilize gradients.",
+            target_param="gradient_accumulation_steps", priority=0.35,
+        ))
+    # Context-aware layer-shape suggestions
+    _propose_layer_shapes(diag, cm, verdict="slow",
+                           current_shape=_current_value_safe(cm, "layer_shape"))
 
 
 def _add_fast(diag: Diagnosis, cm):
@@ -354,7 +577,7 @@ def _add_fast(diag: Diagnosis, cm):
         ))
     if _is_enabled(cm, "lr_warmup"):
         diag.actions.append(Action(
-            type="add_warmup",
+            type="increase_warmup",
             reason="Warmup prevents early huge updates.",
             target_param="lr_warmup", priority=0.7,
         ))
@@ -367,12 +590,9 @@ def _add_fast(diag: Diagnosis, cm):
 
 
 def _add_converged(diag: Diagnosis, cm):
-    if _is_tunable(cm, "layer_shape"):
-        diag.actions.append(Action(
-            type="change_layer_shape",
-            reason="Try different shape (pyramid/funnel/hourglass).",
-            target_param="layer_shape", priority=0.55,
-        ))
+    # Converged early -> try shape changes as exploration
+    _propose_layer_shapes(diag, cm, verdict="healthy",
+                           current_shape=_current_value_safe(cm, "layer_shape"))
     if _is_tunable(cm, "hidden_size"):
         diag.actions.append(Action(
             type="add_width",
@@ -415,3 +635,26 @@ def _add_healthy(diag: Diagnosis, cm):
             type="add_width",
             reason="Explore more capacity.", priority=0.45,
         ))
+    # If focal loss is currently in use, FTTS can tune gamma
+    if _is_tunable(cm, "focal_gamma"):
+        diag.actions.append(Action(
+            type="increase_focal_gamma",
+            reason="Higher gamma focuses harder on difficult examples.",
+            target_param="focal_gamma", priority=0.35,
+        ))
+        diag.actions.append(Action(
+            type="decrease_focal_gamma",
+            reason="Lower gamma broadens attention across all examples.",
+            target_param="focal_gamma", priority=0.30,
+        ))
+    # Try alternative loss as a low-priority probe
+    if _is_tunable(cm, "loss_function"):
+        diag.actions.append(Action(
+            type="try_cross_entropy",
+            reason="Probe whether plain cross-entropy works better.",
+            target_param="loss_function",
+            suggested_value="cross_entropy", priority=0.20,
+        ))
+    # Context-aware layer-shape suggestions (exploration mode)
+    _propose_layer_shapes(diag, cm, verdict="healthy",
+                           current_shape=_current_value_safe(cm, "layer_shape"))

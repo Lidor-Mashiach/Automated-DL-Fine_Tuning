@@ -42,26 +42,29 @@ def load_local(cfg: RunConfig):
 
 def _load_tabular(cfg: RunConfig):
     source = Path(cfg.local_dataset_path)
-    data_dir = source.parent
-    train_path = data_dir / "Train_set.csv"
-    val_path = data_dir / "Val_set.csv"
-    test_path = data_dir / "Test_set.csv"
+    if not source.exists():
+        raise FileNotFoundError(
+            f"Dataset file '{source}' not found. "
+            f"Place your CSV/NPY/Parquet there or edit LOCAL_DATASET_PATH."
+        )
+
+    # Per-dataset split sub-folder to avoid collisions when running multiple
+    # datasets in parallel.
+    split_dir = source.parent / f"{source.stem}_split"
+    split_dir.mkdir(parents=True, exist_ok=True)
+    train_path = split_dir / "Train_set.csv"
+    val_path = split_dir / "Val_set.csv"
+    test_path = split_dir / "Test_set.csv"
 
     if not all(p.exists() for p in (train_path, val_path, test_path)):
-        if not source.exists():
-            raise FileNotFoundError(
-                f"Dataset file '{source}' not found. "
-                f"Place your CSV there or edit LOCAL_DATASET_PATH."
-            )
-        df = pd.read_csv(source)
+        df = _read_tabular_file(source)
         _split_3way_csv(df, cfg, train_path, val_path, test_path)
-        print(f"[data] Created 3-way split: "
-              f"Train({int(cfg.train_pct*100)}%) / "
-              f"Val({int(cfg.val_pct*100)}%) / "
-              f"Test({int(cfg.test_pct*100)}%) at {data_dir}")
+        print(f"[data] Created 3-way split for '{source.name}' in {split_dir.name}/:")
+        print(f"[data]   Train: {int(cfg.train_pct*100)}%   "
+              f"Val: {int(cfg.val_pct*100)}%   "
+              f"Test: {int(cfg.test_pct*100)}%")
     else:
-        print(f"[data] Using existing split: {train_path.name}, "
-              f"{val_path.name}, {test_path.name}")
+        print(f"[data] Using existing split in {split_dir.name}/")
 
     train_df = pd.read_csv(train_path)
     val_df = pd.read_csv(val_path)
@@ -79,6 +82,24 @@ def _load_tabular(cfg: RunConfig):
     val_dataset = TensorDataset(torch.from_numpy(X_val),
                                  torch.from_numpy(y_val))
 
+    # Class-imbalance detection (classification only)
+    imbalance_ratio = 1.0
+    if cfg.task_type == "classification" and classes is not None:
+        unique, counts = np.unique(y_train, return_counts=True)
+        if len(counts) > 1 and counts.min() > 0:
+            imbalance_ratio = float(counts.max()) / float(counts.min())
+            counts_str = ", ".join(
+                f"{int(unique[i])}={counts[i]}" for i in range(len(unique))
+            )
+            print(f"[data] Class distribution: {{{counts_str}}}")
+            print(f"[data] Imbalance ratio: {imbalance_ratio:.1f}:1")
+            if imbalance_ratio >= 10.0:
+                print("[data] [INFO] High class imbalance - "
+                      "auto loss_function will pick Focal Loss with gamma=2.5.")
+            elif imbalance_ratio >= 3.0:
+                print("[data] [INFO] Moderate class imbalance - "
+                      "auto loss_function will pick Focal Loss with gamma=1.5.")
+
     data_info = {
         "input_dim": X_train.shape[1],
         "output_dim": output_dim,
@@ -88,17 +109,47 @@ def _load_tabular(cfg: RunConfig):
         "feature_columns": feature_cols,
         "classes": classes.tolist() if classes is not None else None,
         "test_set_path": str(test_path),
+        "imbalance_ratio": imbalance_ratio,
     }
 
     def make_loaders(batch_size: int, val_split: float = 0.2,
-                     seed: int = 42, **_ignored):
-        # val_split from the YAML is ignored - we use the file-based val set
+                     seed: int = 42, num_workers: int = 0, **_ignored):
         return (
-            DataLoader(train_dataset, batch_size=batch_size, shuffle=True),
-            DataLoader(val_dataset, batch_size=batch_size, shuffle=False),
+            DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                       num_workers=num_workers),
+            DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
+                       num_workers=num_workers),
         )
 
     return make_loaders, data_info
+
+
+def _read_tabular_file(source: Path) -> pd.DataFrame:
+    """Read a tabular file based on its extension. Supports csv, npy, parquet."""
+    suffix = source.suffix.lower()
+
+    if suffix == ".csv":
+        return pd.read_csv(source)
+
+    if suffix == ".parquet":
+        return pd.read_parquet(source)
+
+    if suffix == ".npy":
+        # NPY: assume the last column is the label, others are features.
+        # User can override via FEATURE_COLUMNS / LABEL_COLUMN naming.
+        arr = np.load(source)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"NPY file must be 2D (samples x features+label), got shape {arr.shape}."
+            )
+        n_cols = arr.shape[1]
+        col_names = [f"feature_{i}" for i in range(n_cols - 1)] + ["label"]
+        return pd.DataFrame(arr, columns=col_names)
+
+    raise ValueError(
+        f"Unsupported file extension: {suffix}. "
+        f"Supported: .csv, .npy, .parquet"
+    )
 
 
 # ============================================================= TEXT
@@ -161,17 +212,85 @@ def _load_text(cfg: RunConfig):
         ids = [vocab.get(w, 1) for w in t.lower().split()]
         return ids[:seq_len] + [0] * max(0, seq_len - len(ids))
 
+
+    class _AugmentedTextDataset(torch.utils.data.Dataset):
+        """Wraps a tensor dataset with on-the-fly text augmentation (training only)."""
+
+        def __init__(self, X, y, augmentation: str = "none", prob: float = 0.0):
+            self.X = X
+            self.y = y
+            self.augmentation = augmentation
+            self.prob = float(prob)
+
+        def __len__(self):
+            return len(self.X)
+
+        def __getitem__(self, idx):
+            x = self.X[idx].clone()
+            y = self.y[idx]
+            if self.augmentation == "none" or self.prob <= 0:
+                return x, y
+
+            if self.augmentation == "token_dropout":
+                # Mask tokens (set to 0 = pad token) with given probability
+                mask = torch.rand(x.shape) < self.prob
+                # Don't mask actual padding (already 0)
+                non_pad = x != 0
+                x = torch.where(mask & non_pad, torch.zeros_like(x), x)
+
+            elif self.augmentation == "word_shuffle":
+                # Shuffle tokens within small windows of size 3
+                if len(x) >= 3 and torch.rand(1).item() < self.prob:
+                    n = len(x)
+                    win = 3
+                    for i in range(0, n - win + 1, win):
+                        if torch.rand(1).item() < 0.5:
+                            perm = torch.randperm(win)
+                            x[i:i+win] = x[i:i+win][perm]
+
+            elif self.augmentation == "ngram_shuffle":
+                # Permute n-grams (size 2-3) across the sequence.
+                # More aggressive than word_shuffle: breaks long-range order
+                # while preserving local n-gram structure.
+                if len(x) >= 6 and torch.rand(1).item() < self.prob:
+                    ngram_size = 2 if torch.rand(1).item() < 0.5 else 3
+                    n = len(x)
+                    n_chunks = n // ngram_size
+                    if n_chunks >= 2:
+                        chunks = [x[i*ngram_size:(i+1)*ngram_size]
+                                  for i in range(n_chunks)]
+                        perm = torch.randperm(n_chunks)
+                        chunks = [chunks[i] for i in perm]
+                        shuffled = torch.cat(chunks)
+                        # Keep any tail that didn't fit into a full chunk
+                        tail = x[n_chunks*ngram_size:]
+                        x = torch.cat([shuffled, tail])
+            return x, y
+
+
     def make_loaders(batch_size: int, val_split: float = 0.2,
-                     seed: int = 42, seq_len: int = 128, **_ignored):
+                     seed: int = 42, seq_len: int = 128,
+                     num_workers: int = 0,
+                     text_augmentation: str = "none",
+                     text_augmentation_prob: float = 0.0, **_ignored):
         X_tr = np.stack([_encode(t, seq_len) for t in texts_train])
         X_va = np.stack([_encode(t, seq_len) for t in texts_val])
-        tr_ds = TensorDataset(torch.from_numpy(X_tr).long(),
-                              torch.from_numpy(y_train.astype(np.int64)))
-        va_ds = TensorDataset(torch.from_numpy(X_va).long(),
-                              torch.from_numpy(y_val))
+
+        X_tr_t = torch.from_numpy(X_tr).long()
+        X_va_t = torch.from_numpy(X_va).long()
+        y_tr_t = torch.from_numpy(y_train.astype(np.int64))
+        y_va_t = torch.from_numpy(y_val)
+
+        # Train set uses augmentation; val set never augmented
+        tr_ds = _AugmentedTextDataset(X_tr_t, y_tr_t,
+                                        augmentation=text_augmentation,
+                                        prob=text_augmentation_prob)
+        va_ds = TensorDataset(X_va_t, y_va_t)
         return (
-            DataLoader(tr_ds, batch_size=batch_size, shuffle=True),
-            DataLoader(va_ds, batch_size=batch_size, shuffle=False),
+            DataLoader(tr_ds, batch_size=batch_size, shuffle=True,
+                       num_workers=num_workers),
+            DataLoader(va_ds, batch_size=batch_size, shuffle=False,
+                       num_workers=num_workers),
         )
 
     return make_loaders, data_info
@@ -341,12 +460,39 @@ def _prepare_xy(df: pd.DataFrame, cfg: RunConfig, fit_stats: bool = True,
 
     X = X_df.values.astype(np.float32)
 
+    # Determine normalization method from config (default: standardize)
+    norm_method = "standardize"
+    # Look at any config_manager attached to cfg via attribute? We don't have it here.
+    # Use the field on cfg if present, else default.
+    if hasattr(cfg, "_normalization_method") and cfg._normalization_method:
+        norm_method = cfg._normalization_method
+
     if fit_stats:
-        _tabular_stats["mean"] = X.mean(axis=0)
-        _tabular_stats["std"] = X.std(axis=0) + 1e-8
-    mean = _tabular_stats.get("mean", X.mean(axis=0))
-    std = _tabular_stats.get("std", X.std(axis=0) + 1e-8)
-    X = (X - mean) / std
+        if norm_method == "standardize":
+            _tabular_stats["mean"] = X.mean(axis=0)
+            _tabular_stats["std"] = X.std(axis=0) + 1e-8
+        elif norm_method == "min_max":
+            _tabular_stats["min"] = X.min(axis=0)
+            _tabular_stats["max"] = X.max(axis=0)
+        elif norm_method == "max_abs":
+            _tabular_stats["max_abs"] = np.abs(X).max(axis=0) + 1e-8
+        _tabular_stats["norm_method"] = norm_method
+
+    method = _tabular_stats.get("norm_method", "standardize")
+    if method == "standardize":
+        mean = _tabular_stats.get("mean", X.mean(axis=0))
+        std = _tabular_stats.get("std", X.std(axis=0) + 1e-8)
+        X = (X - mean) / std
+    elif method == "min_max":
+        x_min = _tabular_stats.get("min", X.min(axis=0))
+        x_max = _tabular_stats.get("max", X.max(axis=0))
+        denom = (x_max - x_min)
+        denom[denom == 0] = 1.0
+        X = (X - x_min) / denom
+    elif method == "max_abs":
+        x_max_abs = _tabular_stats.get("max_abs", np.abs(X).max(axis=0) + 1e-8)
+        X = X / x_max_abs
+    # method == "none": leave X as is
 
     y_raw = df[label_col].values
     if cfg.task_type == "classification":

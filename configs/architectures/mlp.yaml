@@ -66,14 +66,15 @@ architectures:
   # layer_shape
   # -----------
   # How the width of hidden layers changes from input to output:
-  #   uniform   : all layers same width (e.g. 128-128-128)
-  #   funnel    : width halves each layer (128-64-32)
-  #   pyramid   : width grows each layer (32-64-128)
-  #   hourglass : grows then shrinks (64-128-64)
+  #   uniform    : all layers same width (128-128-128)
+  #   funnel     : width halves each layer (128-64-32)
+  #   pyramid    : width grows each layer (32-64-128)
+  #   hourglass  : grows toward middle then shrinks (64-128-64)
+  #   bottleneck : shrinks toward middle then grows (128-64-128) - autoencoder-like
   layer_shape:
     enabled: true
     initial_value: "uniform"
-    choices: ["uniform", "funnel", "pyramid", "hourglass"]
+    choices: ["uniform", "funnel", "pyramid", "hourglass", "bottleneck"]
 
 
 # =============================================================================
@@ -156,7 +157,7 @@ optimization:
   #   adamw   : Adam with correct weight decay handling. Best for deep nets.
   #   sgd     : With momentum, competes with Adam on final accuracy. Slower.
   #   rmsprop : Good for RNNs. Sometimes gives more stable training.
-  name:
+  optimizer_name:
     enabled: true
     initial_value: "adam"
     choices: ["adam", "adamw", "sgd", "rmsprop"]
@@ -223,3 +224,110 @@ training:
   validation_split:
     enabled: true
     initial_value: 0.2
+
+  # loss_function
+  # -------------
+  # Which loss function to optimize during training.
+  #   auto          : pick automatically based on TASK_TYPE and class balance:
+  #                     classification + balanced  -> cross_entropy
+  #                     classification + ratio>3:1 -> focal (gamma=1.5)
+  #                     classification + ratio>10:1-> focal (gamma=2.5)
+  #                     regression                 -> mse
+  #   cross_entropy : standard for classification, balanced classes.
+  #   focal         : classification with class imbalance; uses focal_gamma below.
+  #   mse           : regression only.
+  loss_function:
+    enabled: true
+    initial_value: "auto"
+    choices: ["auto", "cross_entropy", "focal", "mse"]
+
+  # focal_gamma
+  # -----------
+  # Focusing strength for Focal Loss. Only used when loss_function = "focal".
+  # 0 = no focusing (acts like cross_entropy).
+  # 1 = mild focus on hard examples.
+  # 2 = recommended starting point (paper default for moderate imbalance).
+  # 5 = aggressive; can hurt training.
+  # When loss_function = "auto", gamma is set automatically based on imbalance ratio.
+  focal_gamma:
+    enabled: true
+    initial_value: 2.0
+    range: [0.5, 5.0]
+
+  # normalization
+  # -------------
+  # How tabular features are scaled before training. (Tabular data only.)
+  #   none        : no scaling. Use only if data is already preprocessed.
+  #   standardize : (x - mean) / std per column. Default. Best for symmetric data.
+  #   min_max     : (x - min) / (max - min) per column. Maps to [0, 1].
+  #                 Good for bounded features (percentages, scores).
+  #                 Sensitive to outliers.
+  #   max_abs     : x / max(|x|) per column. Maps to [-1, 1]. Preserves zeros.
+  #                 Good for sparse data.
+  normalization:
+    enabled: true
+    initial_value: "standardize"
+    choices: ["none", "standardize", "min_max", "max_abs"]
+
+  # num_workers
+  # -----------
+  # SYSTEM/HARDWARE setting (the Analyzer never touches this).
+  # Number of subprocess workers loading batches in parallel.
+  #   0     : single process (default, safest, recommended for tabular data)
+  #   2-4   : good for image / text datasets
+  #   8+    : only for very large datasets with many CPU cores
+  # Each worker uses additional RAM. On Windows, workers are slower due
+  # to process-creation overhead. See README.md for RAM estimates.
+  num_workers:
+    enabled: true
+    initial_value: 0
+    range: [0, 8]
+
+
+  # gradient_accumulation_steps
+  # ---------------------------
+  # Accumulate gradients over N batches before stepping the optimizer.
+  # Effective batch size = batch_size * gradient_accumulation_steps.
+  # Use this to simulate large batches when GPU memory is limited.
+  #   1 = no accumulation (default, single step per batch).
+  #   2-8 = accumulate; useful when you want batch_size=256 but only RAM for 32.
+  gradient_accumulation_steps:
+    enabled: true
+    initial_value: 1
+    range: [1, 8]
+
+  # mixed_precision
+  # ---------------
+  # Use fp16 (half precision) on GPU to roughly double training speed and
+  # halve VRAM usage. Has no effect on CPU.
+  #   true  : enables torch.cuda.amp autocast + GradScaler.
+  #   false : standard fp32 training (default - safest).
+  mixed_precision:
+    enabled: true
+    initial_value: false
+    choices: [true, false]
+
+
+# =============================================================================
+# Advanced optimizer parameters (disabled by default - for expert tuning)
+# =============================================================================
+
+  # adam_beta1
+  # ----------
+  # First moment decay rate for Adam/AdamW. Disabled by default.
+  # Standard value 0.9 is optimal for ~99% of tasks. Lower (0.85) sometimes
+  # helps very large batch training. Enable only if you know what you're doing.
+  adam_beta1:
+    enabled: false
+    initial_value: 0.9
+    range: [0.85, 0.95]
+
+  # adam_beta2
+  # ----------
+  # Second moment decay rate for Adam/AdamW. Disabled by default.
+  # Standard value 0.999 is optimal for ~99% of tasks. Some recipes (GPT-style)
+  # use 0.95 for very large models. Enable only if you know what you're doing.
+  adam_beta2:
+    enabled: false
+    initial_value: 0.999
+    range: [0.9, 0.9999]
