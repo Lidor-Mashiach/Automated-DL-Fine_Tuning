@@ -59,6 +59,7 @@ class RunConfig:
     sampling_top_p: float = 0.9                # for nucleus strategy
     max_generated_words: int = 200             # generation length cap
     melody_probe: bool = False                 # run melody-influence probe
+    run_decoding_comparison: bool = False      # compare 3 sampling strategies on 2 songs
 
     _VALID_ARCH = ("mlp", "cnn", "rnn", "lstm", "transformer")
     _VALID_STRATEGY = ("ftts", "bayesian", "grid")

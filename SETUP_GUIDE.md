@@ -630,6 +630,42 @@ Reports:
 
 Output: `final/melody_probe.json`.
 
+### Decoding strategy comparison
+
+`--run_decoding_comparison true` generates the same prompt with **proportional / temperature=0.7 / nucleus p=0.9** on the first 2 test songs, side-by-side. Required by Assignment 3 sec. 13 (diversity vs coherence analysis).
+
+Output: `final/decoding_comparison.txt` - one section per song, three subsections per strategy.
+
+### Running all three required experiments (Assignment 3 sec. 9)
+
+The assignment requires a baseline + two melody-conditioned variants. Run them with distinct `--run_name` values so the output folders don't collide:
+
+```bash
+# 1. Lyrics-only baseline (no MIDI)
+python main.py --run_name ex1_baseline --task_type language_modeling \
+  --data_type lyrics --architecture lstm --midi_variant none \
+  --local_dataset_path ./Data/lyrics_train_set.csv \
+  --word2vec_path ./GoogleNews-vectors-negative300.bin
+
+# 2. Simple MIDI: global features
+python main.py --run_name ex2_simple --task_type language_modeling \
+  --data_type lyrics --architecture lstm --midi_variant simple \
+  --local_dataset_path ./Data/lyrics_train_set.csv \
+  --midi_dir ./Data/midi_files \
+  --word2vec_path ./GoogleNews-vectors-negative300.bin \
+  --melody_probe true --run_decoding_comparison true
+
+# 3. Per-word MIDI: time-aligned features
+python main.py --run_name ex3_per_word --task_type language_modeling \
+  --data_type lyrics --architecture lstm --midi_variant per_word \
+  --local_dataset_path ./Data/lyrics_train_set.csv \
+  --midi_dir ./Data/midi_files \
+  --word2vec_path ./GoogleNews-vectors-negative300.bin \
+  --melody_probe true --run_decoding_comparison true
+```
+
+These can be launched in parallel.
+
 ### Outputs (LM-specific)
 
 ```
@@ -637,6 +673,7 @@ experiments/<RUN_NAME>_*/final/
 ├── model_checkpoint.pt      ← weights + metadata for re-generation
 ├── generated_lyrics.txt     ← all test-song outputs
 ├── melody_probe.json        ← (if --melody_probe true)
+├── decoding_comparison.txt  ← (if --run_decoding_comparison true)
 ├── model.py                 ← standalone code
 └── ...
 ```

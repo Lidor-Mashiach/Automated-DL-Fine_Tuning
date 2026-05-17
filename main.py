@@ -158,6 +158,11 @@ MAX_GENERATED_WORDS = 200
 # MELODY_PROBE: if True, run the melody-influence probe on each test song.
 MELODY_PROBE = False
 
+# RUN_DECODING_COMPARISON: if True, also generate lyrics with proportional /
+# temperature / nucleus sampling side-by-side on 2 test songs. Required by
+# Assignment 3 sec. 13 (diversity vs coherence analysis).
+RUN_DECODING_COMPARISON = False
+
 
 # ==============================================================================
 #                                HARDWARE
@@ -261,6 +266,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sampling_top_p", type=float, default=SAMPLING_TOP_P)
     p.add_argument("--max_generated_words", type=int, default=MAX_GENERATED_WORDS)
     p.add_argument("--melody_probe", type=_bool_arg, default=MELODY_PROBE)
+    p.add_argument("--run_decoding_comparison", type=_bool_arg,
+                    default=RUN_DECODING_COMPARISON,
+                    help="Generate side-by-side comparison of "
+                         "proportional/temperature/nucleus sampling on 2 test songs.")
 
     # Hardware / output
     p.add_argument("--device", default=DEVICE, choices=["auto", "gpu", "cpu"])
@@ -317,6 +326,7 @@ def build_run_config(args) -> RunConfig:
         sampling_top_p=args.sampling_top_p,
         max_generated_words=args.max_generated_words,
         melody_probe=args.melody_probe,
+        run_decoding_comparison=args.run_decoding_comparison,
     )
 
 

@@ -155,6 +155,22 @@ def _run_generation_for_lm(model, cfg, data_info, final_dir, device):
         run_probe=cfg.melody_probe,
     )
 
+    # Decoding strategy comparison (Assignment 3 sec. 13) -
+    # generate the same prompt with proportional / temperature / nucleus
+    # so the user can directly compare diversity vs coherence.
+    if cfg.run_decoding_comparison:
+        from core.generator import run_decoding_comparison
+        print(f"[final] Running decoding strategy comparison on first 2 test songs...")
+        run_decoding_comparison(
+            model=model, vocab=vocab, test_songs=test_songs,
+            initial_word=initial_words[0],
+            midi_variant=midi_variant, midi_dim=midi_dim,
+            device=device, output_dir=final_dir,
+            max_words=cfg.max_generated_words,
+            line_separator_token=line_sep,
+            num_songs_to_compare=2,
+        )
+
 
 def _refit_and_eval(model, cfg, hp, data_info, cm, device):
     """Train on Train+Val combined; evaluate on Test."""

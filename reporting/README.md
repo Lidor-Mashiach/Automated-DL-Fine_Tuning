@@ -165,6 +165,7 @@ For `task_type="language_modeling"`, the `final/` directory contains LM-specific
 - **`model_checkpoint.pt`** - PyTorch state_dict + vocab + hyperparameters + metadata (required for re-generation).
 - **`generated_lyrics.txt`** - test-set generations: every test song x every initial word.
 - **`melody_probe.json`** - (if `--melody_probe true`) per-song Jaccard, sequence overlap, length diff vs. corrupted MIDI.
+- **`decoding_comparison.txt`** - (if `--run_decoding_comparison true`) side-by-side generation of proportional / temperature=0.7 / nucleus p=0.9 on 2 test songs. Used for diversity-vs-coherence analysis (Assignment 3 sec. 13).
 - **`model.py`** - real, runnable script with the best hyperparameters inlined.
 - **`data/`** - subfolder next to model.py containing the lyrics CSV, MIDI files (and Word2Vec if it fit). Edit/swap to retrain on new inputs.
 

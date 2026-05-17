@@ -277,3 +277,92 @@ def run_generation_for_test_set(
         with open(probe_path, "w", encoding="utf-8") as f:
             json.dump(probe_results, f, indent=2)
         print(f"[generator] Wrote melody probe -> {probe_path}")
+
+
+def run_decoding_comparison(
+    model,
+    vocab,
+    test_songs: list[dict],
+    initial_word: str,
+    midi_variant: str,
+    midi_dim: int,
+    device,
+    output_dir: Path,
+    strategies: list[dict] = None,
+    max_words: int = 200,
+    line_separator_token: str = "&",
+    num_songs_to_compare: int = 2,
+):
+    """
+    Compare decoding strategies on a small subset of test songs.
+
+    Required by Assignment 3 sec. 13 ("Compare the decoding strategies you
+    implemented. For a small fixed subset of the test cases (e.g., two
+    melodies), generate lyrics using proportional, temperature-scaled, and
+    top-k or nucleus sampling").
+
+    Writes decoding_comparison.txt with the same (song, initial_word) generated
+    via each strategy, so the user can directly compare diversity vs. coherence.
+
+    Args:
+        strategies: list of dicts like
+            [{"name": "proportional"},
+             {"name": "temperature", "temperature": 0.7},
+             {"name": "nucleus", "p": 0.9}]
+          Defaults to a reasonable comparison set.
+        num_songs_to_compare: how many test songs to use (first N).
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / "decoding_comparison.txt"
+
+    if strategies is None:
+        strategies = [
+            {"name": "proportional"},
+            {"name": "temperature", "temperature": 0.7},
+            {"name": "nucleus", "p": 0.9},
+        ]
+
+    songs_subset = test_songs[:num_songs_to_compare]
+
+    sections = []
+    sections.append("=" * 70)
+    sections.append("DECODING STRATEGY COMPARISON")
+    sections.append("=" * 70)
+    sections.append(
+        f"Comparing {len(strategies)} sampling strategies on "
+        f"{len(songs_subset)} test songs (initial word: '{initial_word}').\n"
+        f"Use this to assess diversity vs. coherence trade-offs."
+    )
+    sections.append("")
+
+    for song in songs_subset:
+        sections.append("=" * 70)
+        sections.append(f"Song: {song['artist']} - {song['song']}")
+        sections.append("=" * 70)
+
+        midi_feats = (song.get("midi_per_word") if midi_variant == "per_word"
+                       else song.get("midi_simple"))
+
+        for strat in strategies:
+            name = strat["name"]
+            kwargs = {k: v for k, v in strat.items() if k != "name"}
+            label_parts = [name]
+            for k, v in kwargs.items():
+                label_parts.append(f"{k}={v}")
+            label = " | ".join(label_parts)
+            sections.append(f"\n--- {label} ---")
+
+            tokens = generate_lyrics(
+                model, vocab, initial_word, midi_feats, midi_dim, device,
+                max_words=max_words, sampling_strategy=name,
+                sampling_kwargs=kwargs,
+                line_separator_token=line_separator_token,
+            )
+            sections.append(f"{initial_word} " + format_lyrics(tokens, line_separator_token))
+
+        sections.append("")
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(sections))
+    print(f"[generator] Wrote decoding comparison -> {out_path}")

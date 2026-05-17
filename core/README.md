@@ -199,6 +199,7 @@ End-to-end generation pipeline:
 - **`format_lyrics(tokens, line_separator)`** - converts the line-separator token to newlines for human-readable output.
 - **`melody_influence_probe(...)`** - generates twice (real MIDI vs shuffled MIDI) with the same RNG seed; reports Jaccard / sequence overlap / length diff.
 - **`run_generation_for_test_set(...)`** - iterates over test songs x initial words, writes `generated_lyrics.txt` and (optionally) `melody_probe.json`.
+- **`run_decoding_comparison(...)`** - generates the same prompt on a small subset of test songs (default: 2) with proportional / temperature / nucleus sampling side-by-side. Writes `decoding_comparison.txt`. Triggered by `--run_decoding_comparison true`.
 
 ### `model.py` for LM
 Yes - LM runs produce a real, runnable `model.py` (just like other task types). Because LM has external file dependencies, the generator also creates:

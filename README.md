@@ -309,6 +309,12 @@ In `configs/architectures/<arch>.yaml`, find `learning_rate` and set `initial_va
 **Q: How does the Test_set get used?**
 Only **once**, at the very end. After tuning is complete, the best hyperparameters are used to retrain a fresh model on Train+Val combined; that model is then evaluated on Test_set. This is standard practice in ML and avoids data leakage.
 
+**Q: How do I compare different sampling strategies for lyrics generation?**
+Pass `--run_decoding_comparison true` when running a `language_modeling` task. After training, the system generates the same prompt on the first 2 test songs using 3 sampling strategies side-by-side (proportional, temperature=0.7, nucleus p=0.9). Output: `final/decoding_comparison.txt`. Required by Assignment 3 sec. 13 (diversity vs coherence analysis).
+
+**Q: For lyrics generation, do I need to run multiple experiments?**
+Yes - the assignment requires 3 runs: a lyrics-only baseline (`--midi_variant none`) plus two melody-conditioned variants (`--midi_variant simple` for global features, `--midi_variant per_word` for time-aligned features). Run each with its own `--run_name` (e.g. `ex1_baseline`, `ex2_simple`, `ex3_per_word`). Output folders are automatically unique - you can run them in parallel.
+
 **Q: How does AutoTune-NN handle imbalanced classes?**
 Automatically. When the data is loaded, the class distribution is checked. If `loss_function: "auto"` (the default), the system picks Focal Loss with a tuned `gamma` based on the imbalance ratio:
 - ratio < 3:1 → CrossEntropy (balanced)
