@@ -190,3 +190,46 @@ training:
     enabled: false
     initial_value: 0.999
     range: [0.9, 0.9999]
+
+
+# =============================================================================
+# Language modeling parameters (used only when task_type == "language_modeling")
+# =============================================================================
+
+  # fusion_method
+  # -------------
+  # How Word2Vec embeddings and MIDI features are combined per timestep.
+  #   concatenate : direct concatenation - simple, no learned mapping.
+  #   project     : each side passes through a Linear+ReLU first, then concat.
+  #                 Allows the model to balance the contribution of each modality.
+  fusion_method:
+    enabled: true
+    initial_value: "concatenate"
+    choices: ["concatenate", "project"]
+
+  # fusion_proj_dim
+  # ---------------
+  # Width of the projection layers (only used when fusion_method == "project").
+  fusion_proj_dim:
+    enabled: true
+    initial_value: 128
+    choices: [64, 128, 256]
+
+  # freeze_embeddings
+  # -----------------
+  # If true (default), Word2Vec embeddings are loaded but not updated during
+  # training. If false, they are fine-tuned (slower, may overfit).
+  freeze_embeddings:
+    enabled: true
+    initial_value: true
+    choices: [true, false]
+
+  # tie_weights
+  # -----------
+  # Tie output projection weights with embedding weights (requires
+  # hidden_size == embedding_dim). Reduces parameters and often improves LM
+  # generalization, but constrains the architecture.
+  tie_weights:
+    enabled: false
+    initial_value: false
+    choices: [true, false]

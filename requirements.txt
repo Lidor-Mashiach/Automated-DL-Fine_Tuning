@@ -78,3 +78,11 @@ matplotlib>=3.7         # Generate best_trial.png.
 # ---- Hyperparameter search ----
 optuna>=3.4             # Required only for SEARCH_STRATEGY="bayesian".
                         # FTTS and grid search work without it.
+
+# ---- Language modeling: lyrics generation (Assignment 3) ----
+# All optional. Required only when TASK_TYPE="language_modeling".
+gensim>=4.3             # Load Word2Vec .bin files (Google News format).
+                        # If you use GloVe .txt embeddings, this is not required.
+pretty_midi>=0.2.10     # Parse .mid files to extract MIDI features.
+tensorboard>=2.14       # TensorBoard graphs of training/validation loss.
+                        # Logger no-ops if not installed.

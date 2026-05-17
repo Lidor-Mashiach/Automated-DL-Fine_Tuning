@@ -70,3 +70,41 @@ Datasets with a built-in train/test split (MNIST, CIFAR) preserve the original t
 ## 📄 Sample File
 
 `Data-Set.csv` is a synthetic XOR-like binary classification dataset (500 rows, 3 features) provided for quick smoke-testing. Replace with your real data when ready.
+
+---
+
+## 🎵 Lyrics Dataset (language modeling)
+
+For `task_type="language_modeling"`, the CSV is expected in this format (no header required):
+
+```csv
+elton john,candle in the wind,goodbye norma jean & though i never knew you at all & you had the grace ...
+gerry rafferty,baker street,winding your way down on baker street & lite in your head and dead on your feet & ...
+```
+
+| Column | Content |
+|---|---|
+| 1 | Artist name |
+| 2 | Song name |
+| 3 | Full lyrics (one cell). Lines are separated by `&` (configurable via `--line_separator_token`). |
+
+### MIDI files
+
+Place .mid files in a separate directory and pass via `--midi_dir`. Filenames must follow:
+
+```
+<artist_with_underscores>_-_<song_with_underscores>.mid
+```
+
+Example: `Elton_John_-_Candle_in_the_Wind.mid` matches `"elton john","candle in the wind"`.
+
+Songs without a matching MIDI file get a zero feature vector (the model still trains as a baseline).
+
+### Word2Vec embeddings
+
+Pretrained Google News word2vec (300-dim) is recommended:
+- Download `GoogleNews-vectors-negative300.bin.gz` (~1.5 GB)
+- Pass with `--word2vec_path /path/to/GoogleNews-vectors-negative300.bin`
+
+If the file is `.txt` format (GloVe-style), it's parsed directly without gensim.
+If neither is available, embeddings are randomly initialized.

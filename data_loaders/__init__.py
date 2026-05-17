@@ -13,6 +13,10 @@ from core.run_config import RunConfig
 
 
 def load_data(cfg: RunConfig):
+    # Language modeling on lyrics: dedicated loader (handles Word2Vec + MIDI)
+    if cfg.data_type == "lyrics" or cfg.task_type == "language_modeling":
+        from data_loaders.lyrics_loader import load_lyrics
+        return load_lyrics(cfg)
     if cfg.dataset_mode == "local":
         from data_loaders.local_loader import load_local
         return load_local(cfg)

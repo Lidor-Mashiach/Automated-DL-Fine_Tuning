@@ -558,6 +558,98 @@ experiments/<RUN_NAME>_<strategy>_<dataset>_<ranking>/
 
 ---
 
+# Part 5: Language Modeling Mode (lyrics generation)
+
+## 13. Language Modeling
+
+A specialized mode for next-word prediction tasks (e.g. Assignment 3 lyrics generation). Activated by `task_type="language_modeling"` + `data_type="lyrics"`. Only `lstm` is fully supported as the architecture (rnn/transformer can be extended similarly).
+
+### When to use
+
+- Predict the next word in a sequence from previous words.
+- Loss metric (lower = better) instead of accuracy.
+- Optionally combine text input with an auxiliary modality (MIDI features).
+
+### Quick start
+
+```bash
+# Tune (training + generation in one command)
+python main.py \
+  --architecture lstm \
+  --run_name lyrics_baseline \
+  --task_type language_modeling \
+  --data_type lyrics \
+  --local_dataset_path ./Data/lyrics_train_set.csv \
+  --midi_dir ./midi_files \
+  --midi_variant simple \
+  --word2vec_path ./GoogleNews-vectors-negative300.bin \
+  --sampling_strategy nucleus \
+  --sampling_top_p 0.9 \
+  --melody_probe true
+
+# Generate-only (skip training, use checkpoint)
+python main.py \
+  --mode generate \
+  --checkpoint ./experiments/lyrics_baseline_*/final/model_checkpoint.pt \
+  --initial_words love the morning \
+  --sampling_strategy temperature \
+  --sampling_temperature 0.8
+```
+
+### MIDI variants
+
+| `--midi_variant` | Behavior | Use case |
+|---|---|---|
+| `none` | Lyrics-only baseline (no MIDI features). | Required by the assignment as a control. |
+| `simple` | 8-dim global features (tempo, duration, # instruments, ...). Same vector at every timestep. | Tests whether song-level structure helps. |
+| `per_word` | 8-dim per-timestep features (notes active at each word's time slot). | Tests whether moment-by-moment melody helps. |
+
+Run all three variants (`none` / `simple` / `per_word`) to satisfy the assignment's "two melody-conditioned variants + baseline" requirement.
+
+### Sampling strategies (generation-time only)
+
+| `--sampling_strategy` | What it does | Relevant flags |
+|---|---|---|
+| `proportional` | Sample from softmax probabilities directly. | (none) |
+| `temperature` | Divide logits by T before softmax (T<1 sharpens, T>1 flattens). | `--sampling_temperature` |
+| `top_k` | Keep only the top K logits, sample from those. | `--sampling_top_k`, optional `--sampling_temperature` |
+| `nucleus` (top-p) | Smallest set whose cumulative prob exceeds p. | `--sampling_top_p`, optional `--sampling_temperature` |
+
+Strategies do **not** require retraining — they're applied at generation time only.
+
+### Melody-influence probe
+
+`--melody_probe true` runs each generation twice per test song:
+1. With real MIDI.
+2. With shuffled (corrupted) MIDI.
+
+Reports:
+- **Jaccard similarity** of unique tokens (lower = melody matters more).
+- **Sequence overlap** (token-by-token match rate).
+- **Length difference** (absolute word count).
+
+Output: `final/melody_probe.json`.
+
+### Outputs (LM-specific)
+
+```
+experiments/<RUN_NAME>_*/final/
+├── model_checkpoint.pt      ← weights + metadata for re-generation
+├── generated_lyrics.txt     ← all test-song outputs
+├── melody_probe.json        ← (if --melody_probe true)
+├── model.py                 ← standalone code
+└── ...
+```
+
+### Vocabulary & embeddings
+
+- Vocabulary is built from the training lyrics, with a configurable minimum frequency (`--min_word_count`).
+- The line-separator token (default `&`, configurable via `--line_separator_token`) is treated as a regular vocabulary token, so the model learns when to break lines.
+- Word2Vec embeddings are loaded once and aligned to the vocab; out-of-vocab tokens get small random vectors.
+- By default embeddings are frozen; set `freeze_embeddings: false` in `lstm.yaml` to fine-tune them.
+
+---
+
 ## 🧭 Where to Go Next
 
 - For project overview: [`README.md`](README.md)

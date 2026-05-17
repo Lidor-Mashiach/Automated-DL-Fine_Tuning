@@ -131,3 +131,41 @@ Future versions will support **full resume** (reconstructing the ExperimentTree 
 
 - [`README.md`](../README.md) — output folder structure
 - [`core/README.md`](../core/README.md) — Final Refit & Test Evaluation phase
+
+---
+
+## 📊 TensorBoard Logger (`tensorboard_logger.py`)
+
+Optional TensorBoard integration. Logs every trial's training/validation curves under `<run_dir>/tensorboard/`.
+
+### Behavior
+- Initializes via `torch.utils.tensorboard.SummaryWriter`.
+- **No-ops gracefully** if `tensorboard` is not installed (no exception, just disabled).
+- Logs per-trial:
+  - `<trial_id>/train_loss`, `<trial_id>/val_loss`
+  - `<trial_id>/train_metric`, `<trial_id>/val_metric`
+- Logs per run:
+  - `trials/quality_score` (per trial)
+  - `trials/best_val_loss` (per trial)
+
+### View
+```bash
+tensorboard --logdir experiments/<run_name>_*/tensorboard
+```
+
+### Used by
+`core/orchestrator.py` instantiates one logger per run, logs after each trial, and closes it in `_finalize`. Particularly useful for language_modeling runs where the loss curve (not accuracy) is the key signal.
+
+---
+
+## 🎵 Language Modeling Outputs
+
+For `task_type="language_modeling"`, the `final/` directory contains LM-specific deliverables:
+
+- **`model_checkpoint.pt`** - PyTorch state_dict + vocab + hyperparameters + metadata (required for re-generation).
+- **`generated_lyrics.txt`** - test-set generations: every test song x every initial word.
+- **`melody_probe.json`** - (if `--melody_probe true`) per-song Jaccard, sequence overlap, length diff vs. corrupted MIDI.
+- **`model.py`** - real, runnable script with the best hyperparameters inlined.
+- **`data/`** - subfolder next to model.py containing the lyrics CSV, MIDI files (and Word2Vec if it fit). Edit/swap to retrain on new inputs.
+
+The standard `report.txt` is still produced under `tuning/` exactly as for other task types.

@@ -136,3 +136,32 @@ Different imported datasets have different built-in splits:
 | Iris, Wine, Breast Cancer, Digits | None | All three percentages used; must sum to 1.0. |
 
 The console output explains exactly what was done in each run.
+
+---
+
+## 🎵 lyrics_loader.py (language modeling)
+
+Specialized loader for `task_type="language_modeling"` + `data_type="lyrics"`. Auto-selected when either condition is met.
+
+### Input format
+- **CSV**: 3 columns - `artist`, `song`, `lyrics`. No header required. Lines within a song separated by a configurable token (default `&`, set via `--line_separator_token`).
+- **MIDI dir**: `.mid` files named `<Artist>_-_<Song>.mid` (underscores for spaces). Optional - missing files get zero feature vectors.
+- **Word2Vec**: pretrained embeddings (`.bin` via gensim, or `.txt` GloVe-style). Optional - falls back to random init.
+
+### Output
+`load_lyrics(cfg)` returns `(make_loaders, data_info)` where:
+- `make_loaders(batch_size, seq_len, ...)` produces `(train_loader, val_loader)` over fixed-length token windows.
+- `data_info` contains `vocab`, `embedding_matrix`, `midi_dim`, `midi_variant`, `test_songs` (for generation).
+
+### MIDI variants
+| Variant | Dim per timestep | Description |
+|---|---|---|
+| `none` | 0 | Lyrics-only baseline (no MIDI). |
+| `simple` | 8 | Global features (tempo, duration, num_instruments, ...) - same vector at every step. |
+| `per_word` | 8 | Per-timestep features (notes active at each word's time slot). Time-aligned. |
+
+### Vocabulary
+Built from training tokens; minimum frequency configurable via `--min_word_count`. Special tokens: `<pad>` (0), `<unk>` (1), `<eos>` (2). The line separator becomes a regular vocab token so the model learns when to break lines.
+
+### Dataset class
+`LyricsDataset` returns `(input_ids, target_ids, midi_features)` per item. The trainer detects 3-tuple batches and routes them to the LM forward path.

@@ -81,3 +81,29 @@ Optionally, extend `core/analyzer.py` with GRU-specific actions (e.g. `toggle_bi
 - [`SETUP_GUIDE.md`](../SETUP_GUIDE.md#-sizing-your-network-how-deep-how-wide) — sizing rules
 - [`configs/architectures/README.md`](../configs/architectures/README.md) — parameter formats
 - [`core/README.md`](../core/README.md) — Loss vs Accuracy explanation
+
+---
+
+## 🎵 LSTM Language Modeling Variant
+
+When `task_type="language_modeling"`, `build_lstm` returns a different class: `_LSTMLanguageModel`. It supports:
+
+### Dual-input architecture
+- **Word embeddings**: pretrained Word2Vec (300-dim by default), frozen by default but configurable via `freeze_embeddings`.
+- **MIDI features**: per-timestep numeric vector from MIDI files (`midi_dim` set by `--midi_variant`).
+
+### Fusion strategies
+Selectable via `fusion_method` hyperparameter (tunable by FTTS):
+- **`concatenate`**: LSTM input = `[word_emb ; midi_feats]` (direct concat).
+- **`project`**: each modality passes through a `Linear+ReLU` to `fusion_proj_dim`, then concatenated. Lets the model balance the two streams.
+
+When `midi_dim=0` (baseline run), the MIDI input is silently ignored - the model degrades to a standard text-only LM without any code change.
+
+### Per-timestep output
+Returns `logits` shape `(B, T, vocab_size)` and the final hidden state. The trainer reshapes to `(B*T, vocab_size)` for CrossEntropy.
+
+### `step()` for generation
+Exposes a single-timestep forward `step(word_id, midi_feat, hidden)` that the generator pipeline calls token-by-token during sampling.
+
+### Classification mode preserved
+For `task_type="classification"` the LSTM uses the original `_SequenceClassifier` from `rnn.py` (with embedding_dropout). Same builder file, two distinct code paths.

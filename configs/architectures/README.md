@@ -334,3 +334,18 @@ embedding_dropout:
 ```
 
 Dropout applied to the embedding layer's output before feeding it into the recurrent/transformer layers. Different from `dropout` — strong regularizer specific to NLP.
+
+---
+
+## 🎵 LSTM Language Modeling Parameters
+
+When `task_type="language_modeling"`, the LSTM YAML has 4 additional parameters specific to dual-input (Word2Vec + MIDI) training:
+
+| Parameter | Type | Default | When to tune |
+|---|---|---|---|
+| `fusion_method` | choices | `"concatenate"` | If the model isn't learning well with `concatenate`, try `project` (each modality passes through a Linear+ReLU first). |
+| `fusion_proj_dim` | choices | `128` | Only used when `fusion_method=project`. Width of the projection layers. |
+| `freeze_embeddings` | bool | `true` | Default freezes Word2Vec. If the model plateaus (slow verdict), the Analyzer will suggest `false` to add learnable capacity. |
+| `tie_weights` | bool | `false` | Tie output projection to embedding weights. Requires `hidden_size == embedding_dim`. Disabled by default. |
+
+For classification mode, these parameters exist but are silently ignored - the standard `_SequenceClassifier` is used instead of `_LSTMLanguageModel`.

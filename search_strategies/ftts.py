@@ -405,6 +405,12 @@ class FTTS:
             return self._adjust_additive(hp, "adam_beta2",
                                           delta_sign=-1, action_type=t)
 
+        # ----- language modeling (NLP-specific) -----
+        if t == "unfreeze_embeddings":
+            return self._set_value(hp, "freeze_embeddings", False)
+        if t == "change_fusion_method":
+            return self._cycle_choice(hp, "fusion_method")
+
         return None
 
     # -------------- parameter-level adjustment helpers --------------

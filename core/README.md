@@ -177,3 +177,38 @@ This phase is implemented in `core/final_trainer.py` and `core/code_generator.py
 - [`search_strategies/README.md`](../search_strategies/README.md) — FTTS algorithm
 - [`models/README.md`](../models/README.md) — architecture builders
 - [`reporting/README.md`](../reporting/README.md) — output formats
+
+---
+
+## 🎵 Language Modeling Components
+
+These modules are loaded only when `task_type="language_modeling"`.
+
+### `sampling.py`
+Pure functions for next-word selection during generation:
+- **`sample_proportional(logits)`** - sample from softmax directly.
+- **`sample_temperature(logits, T)`** - scale logits by 1/T before softmax.
+- **`sample_top_k(logits, k)`** - keep top K logits, sample from those.
+- **`sample_nucleus(logits, p)`** - smallest set whose cumulative prob > p.
+
+Dispatcher: `sample(strategy, logits, **kwargs)`. Strategies are interchangeable at generation time without retraining.
+
+### `generator.py`
+End-to-end generation pipeline:
+- **`generate_lyrics(model, vocab, initial_word, midi_features, ...)`** - autoregressive generation calling `model.step()` per token.
+- **`format_lyrics(tokens, line_separator)`** - converts the line-separator token to newlines for human-readable output.
+- **`melody_influence_probe(...)`** - generates twice (real MIDI vs shuffled MIDI) with the same RNG seed; reports Jaccard / sequence overlap / length diff.
+- **`run_generation_for_test_set(...)`** - iterates over test songs x initial words, writes `generated_lyrics.txt` and (optionally) `melody_probe.json`.
+
+### `model.py` for LM
+Yes - LM runs produce a real, runnable `model.py` (just like other task types). Because LM has external file dependencies, the generator also creates:
+
+- A **`data/`** subfolder next to `model.py` containing copies of the lyrics CSV and MIDI files (and Word2Vec if it's small enough to copy).
+- **Global path constants** at the top of `model.py` (`LYRICS_CSV_PATH`, `MIDI_DIR`, `WORD2VEC_PATH`) - easy to edit.
+
+The user can:
+- Run `python model.py` as-is (it auto-resolves paths to `./data/...`).
+- Swap files in `data/` to retrain on different inputs.
+- Edit a path constant at the top to point elsewhere.
+
+The script trains end-to-end OR loads `model_checkpoint.pt` if present (skipping training), then generates lyrics on the test split with the chosen sampling strategy.

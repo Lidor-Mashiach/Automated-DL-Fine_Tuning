@@ -9,11 +9,12 @@ The framework runs a series of experiments, analyzes what happened in each one (
 ## ✨ Key Features
 
 - 🏗️ **5 architectures out of the box** — MLP, CNN, RNN, LSTM, Transformer.
+- 🎵 **Language modeling mode** — train an LSTM on lyrics (Word2Vec + MIDI features), generate text with 4 sampling strategies, and probe melody influence.
 - 🧪 **Smart Analyzer** — diagnoses training curves and proposes prioritized actions.
 - 🌳 **FTTS (Fine-Tuning Tree Search)** — tree-based search with backtracking, adaptive step sizes, and **DAG deduplication** (skips already-explored hyperparameter combinations).
 - 🎯 **Context-aware layer shape selection (MLP)** — Analyzer picks the right pattern (uniform / funnel / pyramid / hourglass / bottleneck) based on the verdict; user doesn't have to choose manually.
 - 🔄 **Multiple search strategies** — FTTS (default), Bayesian (Optuna), Grid search.
-- 🚀 **Modern training optimizations** — Mixed Precision (fp16/AMP), Gradient Accumulation, Focal Loss with auto class-imbalance detection, Label Smoothing.
+- 🚀 **Modern training optimizations** — Mixed Precision (fp16/AMP), Gradient Accumulation, Focal Loss with auto class-imbalance detection, Label Smoothing, **TensorBoard logging** (optional).
 - 🎨 **Advanced augmentation** — Mixup + CutMix + CutOut for images; Token Dropout / Word Shuffle / N-gram Shuffle for text; Stochastic Depth for deep Transformers.
 - 📋 **Per-architecture and per-strategy configs** — YAML files with thematic sections, docstrings, and no magic.
 - 📝 **Unified text report** — a single `report.txt` documenting every trial, its parent, its rationale, and its diagnosis.
@@ -133,8 +134,27 @@ These are downloaded automatically to `~/.cache/autotune_nn/` — not into `Data
 ### ▶️ Run It
 
 ```bash
+# Use the settings defined at the top of main.py:
 python main.py
+
+# Override any setting from the CLI:
+python main.py --architecture lstm --run_name my_experiment
+
+# Language modeling (lyrics generation, Assignment 3):
+python main.py \
+  --architecture lstm --task_type language_modeling --data_type lyrics \
+  --local_dataset_path ./Data/lyrics_train_set.csv \
+  --midi_dir ./midi_files --midi_variant simple \
+  --word2vec_path ./GoogleNews-vectors-negative300.bin
+
+# Generate-only (skip training, use existing checkpoint):
+python main.py --mode generate \
+  --checkpoint ./experiments/<run>/final/model_checkpoint.pt \
+  --initial_words love the morning \
+  --sampling_strategy nucleus --sampling_top_p 0.9
 ```
+
+See `python main.py --help` for the full list of flags. Every constant at the top of `main.py` has a corresponding `--<lower_name>` argument.
 
 ---
 

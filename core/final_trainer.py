@@ -75,6 +75,86 @@ def run_final_phase(
     except Exception as exc:
         print(f"[final] [WARN] Could not generate plot: {exc}")
 
+    # 6. Save model checkpoint (state_dict + metadata for generation)
+    checkpoint_path = final_dir / "model_checkpoint.pt"
+    try:
+        _save_checkpoint(checkpoint_path, model, cfg, best_hp, data_info)
+        print(f"[final] Model checkpoint -> {checkpoint_path.name}")
+    except Exception as exc:
+        print(f"[final] [WARN] Could not save checkpoint: {exc}")
+
+    # 7. For language_modeling: generate lyrics on the test set
+    if cfg.task_type == "language_modeling":
+        try:
+            _run_generation_for_lm(
+                model=model, cfg=cfg, data_info=data_info,
+                final_dir=final_dir, device=device,
+            )
+        except Exception as exc:
+            print(f"[final] [WARN] Generation phase failed: {exc}")
+
+
+def _save_checkpoint(path, model, cfg, hp, data_info):
+    """Save model state + metadata needed to reload for generation."""
+    import torch
+    vocab = data_info.get("vocab")
+    payload = {
+        "state_dict": model.state_dict(),
+        "architecture": cfg.architecture,
+        "task_type": cfg.task_type,
+        "hyperparameters": hp,
+        "vocab_itos": vocab.itos if vocab else None,
+        "vocab_stoi": vocab.stoi if vocab else None,
+        "line_separator_token": cfg.line_separator_token,
+        "midi_variant": cfg.midi_variant,
+        "midi_dim": data_info.get("midi_dim", 0),
+        "embedding_dim": data_info.get("embedding_dim"),
+        "vocab_size": data_info.get("vocab_size"),
+        "output_dim": data_info.get("output_dim"),
+    }
+    torch.save(payload, path)
+
+
+def _run_generation_for_lm(model, cfg, data_info, final_dir, device):
+    """Generate lyrics for the test songs using the trained model."""
+    from core.generator import run_generation_for_test_set
+
+    test_songs = data_info.get("test_songs", [])
+    if not test_songs:
+        print("[final] No test songs available - skipping generation.")
+        return
+
+    vocab = data_info["vocab"]
+    midi_variant = data_info["midi_variant"]
+    midi_dim = data_info["midi_dim"]
+    line_sep = cfg.line_separator_token
+
+    # Default initial words: 3 common starters if user didn't supply
+    initial_words = cfg.initial_words or ["love", "the", "i"]
+
+    # Sampling kwargs by strategy
+    sampling_kwargs = {
+        "temperature": cfg.sampling_temperature,
+        "k": cfg.sampling_top_k,
+        "p": cfg.sampling_top_p,
+    }
+
+    print(f"[final] Generating lyrics for {len(test_songs)} test songs "
+          f"x {len(initial_words)} initial words "
+          f"using {cfg.sampling_strategy} sampling...")
+
+    run_generation_for_test_set(
+        model=model, vocab=vocab, test_songs=test_songs,
+        initial_words=initial_words,
+        midi_variant=midi_variant, midi_dim=midi_dim,
+        device=device, output_dir=final_dir,
+        sampling_strategy=cfg.sampling_strategy,
+        sampling_kwargs=sampling_kwargs,
+        max_words=cfg.max_generated_words,
+        line_separator_token=line_sep,
+        run_probe=cfg.melody_probe,
+    )
+
 
 def _refit_and_eval(model, cfg, hp, data_info, cm, device):
     """Train on Train+Val combined; evaluate on Test."""

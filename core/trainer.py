@@ -62,7 +62,8 @@ def _build_loss_function(hp: dict, task_type: str, data_info: dict):
     the data characteristics.
 
     Resolution rules:
-      - regression -> MSE always (focal not applicable to continuous targets).
+      - regression -> MSE always.
+      - language_modeling -> CrossEntropy with ignore_index=pad_idx (always).
       - classification + loss_function='auto':
           ratio < 3:1   -> CrossEntropy
           ratio < 10:1  -> Focal (gamma 1.5)
@@ -76,6 +77,14 @@ def _build_loss_function(hp: dict, task_type: str, data_info: dict):
     """
     if task_type == "regression":
         return nn.MSELoss()
+
+    if task_type == "language_modeling":
+        pad_idx = 0
+        vocab = data_info.get("vocab")
+        if vocab is not None:
+            pad_idx = vocab.pad_idx
+        smoothing = float(hp.get("label_smoothing", 0.0))
+        return nn.CrossEntropyLoss(ignore_index=pad_idx, label_smoothing=smoothing)
 
     loss_choice = hp.get("loss_function", "auto")
     imbalance_ratio = float(data_info.get("imbalance_ratio", 1.0))
@@ -151,10 +160,30 @@ def _build_scheduler(optimizer, hp, epochs):
     return None
 
 
-def _compute_metric(outputs, targets, task_type):
+def _compute_metric(outputs, targets, task_type, loss_fn=None, pad_idx=0):
+    """
+    Compute a 'higher-is-better' metric for a batch.
+
+    classification    -> accuracy in [0, 1]
+    regression        -> -RMSE  (higher = better)
+    language_modeling -> -loss  (higher = better; loss == NLL)
+    """
     if task_type == "classification":
         preds = outputs.argmax(dim=1)
         return (preds == targets).float().mean().item()
+    if task_type == "language_modeling":
+        # outputs: (B, T, V), targets: (B, T)
+        if loss_fn is not None:
+            B, T, V = outputs.shape
+            loss = loss_fn(outputs.reshape(B * T, V), targets.reshape(B * T))
+            return -float(loss.item())
+        # Fallback: token-level accuracy
+        preds = outputs.argmax(dim=-1)
+        mask = (targets != pad_idx)
+        if mask.sum() == 0:
+            return 0.0
+        correct = ((preds == targets) & mask).float().sum()
+        return float(correct / mask.sum())
     diff = outputs.squeeze() - targets.squeeze()
     rmse = torch.sqrt((diff ** 2).mean()).item()
     return -rmse
@@ -245,13 +274,28 @@ def _run_epoch(model, loader, optimizer, loss_fn, device, task_type,
     ctx = torch.enable_grad() if is_train else torch.no_grad()
 
     grad_accum_steps = max(1, int(grad_accum_steps))
+    is_lm = (task_type == "language_modeling")
+    pad_idx = 0
     with ctx:
         if is_train:
             optimizer.zero_grad()
-        for batch_idx, (xb, yb) in enumerate(loader):
+        for batch_idx, batch in enumerate(loader):
+            # Support either (x, y) or (x, y, midi) batches
+            if len(batch) == 3:
+                xb, yb, midi = batch
+                midi = midi.to(device) if midi is not None else None
+            else:
+                xb, yb = batch
+                midi = None
             xb = xb.to(device)
             yb = yb.to(device)
-            yb_loss = yb.float().view(-1, 1) if task_type == "regression" else yb
+
+            if is_lm:
+                yb_loss = yb  # (B, T) int targets
+            elif task_type == "regression":
+                yb_loss = yb.float().view(-1, 1)
+            else:
+                yb_loss = yb
 
             # Apply CutMix or Mixup (training only, classification only)
             mix_targets = None
@@ -280,13 +324,19 @@ def _run_epoch(model, loader, optimizer, loss_fn, device, task_type,
 
             if use_amp and is_train:
                 with torch.cuda.amp.autocast():
-                    outputs = model(xb)
-                    if mix_targets is not None:
-                        ya, yb_perm = mix_targets
-                        loss = (mix_lam * loss_fn(outputs, ya)
-                                + (1 - mix_lam) * loss_fn(outputs, yb_perm))
+                    if is_lm:
+                        outputs, _ = model(xb, midi)
+                        # outputs: (B, T, V), targets: (B, T) -> flatten for CE
+                        B, T, V = outputs.shape
+                        loss = loss_fn(outputs.reshape(B * T, V), yb_loss.reshape(B * T))
                     else:
-                        loss = loss_fn(outputs, yb_loss)
+                        outputs = model(xb)
+                        if mix_targets is not None:
+                            ya, yb_perm = mix_targets
+                            loss = (mix_lam * loss_fn(outputs, ya)
+                                    + (1 - mix_lam) * loss_fn(outputs, yb_perm))
+                        else:
+                            loss = loss_fn(outputs, yb_loss)
                     loss = loss / grad_accum_steps
                 if scaler is not None:
                     scaler.scale(loss).backward()
@@ -299,13 +349,18 @@ def _run_epoch(model, loader, optimizer, loss_fn, device, task_type,
                         scaler.update()
                         optimizer.zero_grad()
             else:
-                outputs = model(xb)
-                if mix_targets is not None:
-                    ya, yb_perm = mix_targets
-                    loss = (mix_lam * loss_fn(outputs, ya)
-                            + (1 - mix_lam) * loss_fn(outputs, yb_perm))
+                if is_lm:
+                    outputs, _ = model(xb, midi)
+                    B, T, V = outputs.shape
+                    loss = loss_fn(outputs.reshape(B * T, V), yb_loss.reshape(B * T))
                 else:
-                    loss = loss_fn(outputs, yb_loss)
+                    outputs = model(xb)
+                    if mix_targets is not None:
+                        ya, yb_perm = mix_targets
+                        loss = (mix_lam * loss_fn(outputs, ya)
+                                + (1 - mix_lam) * loss_fn(outputs, yb_perm))
+                    else:
+                        loss = loss_fn(outputs, yb_loss)
                 if is_train:
                     (loss / grad_accum_steps).backward()
                     if (batch_idx + 1) % grad_accum_steps == 0:
@@ -316,7 +371,8 @@ def _run_epoch(model, loader, optimizer, loss_fn, device, task_type,
                         optimizer.zero_grad()
 
             total_loss += loss.item() * (grad_accum_steps if is_train else 1)
-            total_metric += _compute_metric(outputs, yb, task_type)
+            total_metric += _compute_metric(outputs, yb, task_type,
+                                              loss_fn=loss_fn, pad_idx=pad_idx)
             n_batches += 1
     return total_loss / max(1, n_batches), total_metric / max(1, n_batches)
 

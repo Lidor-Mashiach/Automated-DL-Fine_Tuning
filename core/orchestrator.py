@@ -41,6 +41,7 @@ from data_loaders import load_data
 from models import build_model
 from reporting.plotter import plot_best_trial
 from reporting.reporter import Reporter
+from reporting.tensorboard_logger import TensorBoardLogger
 from search_strategies import build_strategy
 
 
@@ -67,9 +68,29 @@ class Orchestrator:
         # <RUN_NAME>_<strategy>_<dataset>_<ranking>/
         #   tuning/    : tuning artifacts (report.txt, best_trial.png)
         #   final/     : final-phase artifacts (model.py, test_evaluation.txt)
+        # If a folder with the same base name already exists, append _v2/_v3/...
+        # to guarantee uniqueness (protects against parallel runs with the same
+        # RUN_NAME, or re-runs that would otherwise overwrite report.txt).
         ranking_short = self.ranking_metric.replace("_", "")
-        folder_name = f"{cfg.run_name}_{cfg.search_strategy}_{cfg.dataset_label()}_{ranking_short}"
-        self.run_dir = Path(cfg.experiments_root) / folder_name
+        base_folder_name = (f"{cfg.run_name}_{cfg.search_strategy}_"
+                             f"{cfg.dataset_label()}_{ranking_short}")
+        folder_name = base_folder_name
+        root = Path(cfg.experiments_root)
+        suffix = 2
+        while (root / folder_name).exists():
+            folder_name = f"{base_folder_name}_v{suffix}"
+            suffix += 1
+            if suffix > 999:
+                # Pathological case - bail out
+                raise RuntimeError(
+                    f"Could not create a unique run folder under {root}; "
+                    f"too many existing runs with prefix '{base_folder_name}'."
+                )
+        if folder_name != base_folder_name:
+            print(f"[orchestrator] Folder '{base_folder_name}' exists, "
+                  f"using '{folder_name}' to avoid overwriting.")
+
+        self.run_dir = root / folder_name
         self.tuning_dir = self.run_dir / "tuning"
         self.final_dir = self.run_dir / "final"
         self.tuning_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +128,9 @@ class Orchestrator:
              "quality_weights": self.quality_weights},
             self.cm,
         )
+
+        # TensorBoard logger (optional - no-ops if tensorboard not installed)
+        self.tb_logger = TensorBoardLogger(self.run_dir, enabled=True)
 
         # Runtime state
         self.device = torch.device(cfg.device)
@@ -309,6 +333,21 @@ class Orchestrator:
             parent_id=parent_id,
         )
 
+        # TensorBoard: log curves for this trial + quality scalar
+        self.tb_logger.log_trial_curves(
+            trial_id=result.trial_id,
+            train_loss=result.train_loss_curve,
+            val_loss=result.val_loss_curve,
+            train_metric=result.train_metric_curve,
+            val_metric=result.val_metric_curve,
+        )
+        self.tb_logger.log_scalar("trials/quality_score", quality,
+                                    step=self.trial_counter)
+        if result.val_loss_curve:
+            self.tb_logger.log_scalar("trials/best_val_loss",
+                                        min(result.val_loss_curve),
+                                        step=self.trial_counter)
+
         # Console log: result + verdict + child action count
         tag = "[NEW BEST]" if improved else ""
         raw_str = (f"raw={result.raw_best_metric:.4f} "
@@ -402,6 +441,7 @@ class Orchestrator:
     def _finalize(self):
         summary = self._summary()
         self.reporter.finalize(summary)
+        self.tb_logger.close()
 
     def _summary(self) -> dict:
         return {

@@ -62,6 +62,8 @@ ACTION_TYPES = {
     "increase_stochastic_depth",
     # adam betas (advanced; used only when explicitly enabled in YAML)
     "adjust_adam_beta1", "adjust_adam_beta2",
+    # language modeling (NLP-specific)
+    "unfreeze_embeddings", "change_fusion_method",
 }
 
 
@@ -555,6 +557,23 @@ def _add_slow(diag: Diagnosis, cm):
             type="increase_grad_accumulation",
             reason="Larger effective batch may stabilize gradients.",
             target_param="gradient_accumulation_steps", priority=0.35,
+        ))
+    # Language modeling: unfreezing Word2Vec embeddings adds capacity
+    if _is_tunable(cm, "freeze_embeddings"):
+        diag.actions.append(Action(
+            type="unfreeze_embeddings",
+            reason="Unfreezing pretrained embeddings adds learnable capacity "
+                   "when the model is stuck (LM-specific).",
+            target_param="freeze_embeddings",
+            suggested_value=False, priority=0.45,
+        ))
+    # Language modeling: alternative fusion strategy when stuck
+    if _is_tunable(cm, "fusion_method"):
+        diag.actions.append(Action(
+            type="change_fusion_method",
+            reason="Switch fusion strategy (e.g. project instead of concatenate) "
+                   "to learn a better text-MIDI combination (LM-specific).",
+            target_param="fusion_method", priority=0.35,
         ))
     # Context-aware layer-shape suggestions
     _propose_layer_shapes(diag, cm, verdict="slow",

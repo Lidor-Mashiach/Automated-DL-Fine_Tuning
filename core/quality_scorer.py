@@ -21,6 +21,8 @@ a named profile (performance / balanced / robust) or define custom weights.
 from dataclasses import dataclass
 from typing import Sequence
 
+import numpy as np
+
 from core.smoothing import moving_average, tail_average
 
 
@@ -106,6 +108,20 @@ def _compute_best_metric_component(val_metric: Sequence[float],
     if task_type == "classification":
         # Accuracy already in [0, 1]
         return max(0.0, min(1.0, best)), best
+    elif task_type == "language_modeling":
+        # val_metric is -loss (higher=better). Convert to a 0-1 score via
+        # perplexity squash: score = 1 / (1 + ppl/100)
+        # - loss=0 -> ppl=1   -> score ~ 0.99
+        # - loss=2 -> ppl~7.4 -> score ~ 0.93
+        # - loss=5 -> ppl~148 -> score ~ 0.40
+        # - loss=10 -> ppl~22026 -> score ~ 0.005
+        loss_val = -best  # convert back to positive loss
+        try:
+            ppl = float(np.exp(loss_val))
+        except (OverflowError, FloatingPointError):
+            ppl = 1e9
+        score = 1.0 / (1.0 + ppl / 100.0)
+        return max(0.0, min(1.0, score)), best
     else:
         # Regression: best is -RMSE, maps to [0, 1] via 1 / (1 + RMSE)
         # RMSE=0 -> score=1. RMSE=1 -> score=0.5. RMSE=infinity -> score=0.

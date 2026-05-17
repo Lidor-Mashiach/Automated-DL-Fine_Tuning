@@ -15,6 +15,8 @@ anywhere Python + the listed pip packages are available.
 
 from pathlib import Path
 
+from core.lm_codegen import _generate_lm_model_py, _populate_lm_data_dir
+
 
 _HEADER_TEMPLATE = '''"""
 ================================================================================
@@ -83,6 +85,31 @@ def generate_model_py(path: Path, cfg, hp: dict, data_info: dict,
     arch = cfg.architecture
     task_type = cfg.task_type
     seed = cfg.random_seed if cfg.random_seed is not None else 42
+
+    # Language modeling: generate a real, runnable model.py.
+    # The dependency on external files (Word2Vec, MIDI, CSV) is handled via:
+    #   1) Global path constants at the top of the file (easy to edit).
+    #   2) A `data/` subfolder placed next to model.py, populated with copies
+    #      (or symlinks) of the source files.
+    # The user can: (a) run as-is, (b) replace anything in data/, or
+    # (c) edit a path at the top.
+    if task_type == "language_modeling":
+        body = _generate_lm_model_py(
+            cfg=cfg, hp=hp, data_info=data_info,
+            total_trials=total_trials,
+            best_quality=best_quality,
+            best_metric_raw=best_metric_raw,
+            best_metric_smoothed=best_metric_smoothed,
+            test_metric=test_metric, test_loss=test_loss,
+            smoothing_window=smoothing_window,
+            seed=seed,
+        )
+        path.write_text(body, encoding="utf-8")
+        # Copy the source data files into final/data/ so the generated model.py
+        # is self-contained out of the box.
+        _populate_lm_data_dir(path.parent / "data", cfg)
+        return
+
     loss_name = _resolve_loss_name(hp, task_type, data_info)
 
     if cfg.dataset_mode == "local":
