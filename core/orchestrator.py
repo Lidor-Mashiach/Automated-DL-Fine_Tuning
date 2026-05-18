@@ -340,6 +340,7 @@ class Orchestrator:
             val_loss=result.val_loss_curve,
             train_metric=result.train_metric_curve,
             val_metric=result.val_metric_curve,
+            task_type=self.cfg.task_type,
         )
         self.tb_logger.log_scalar("trials/quality_score", quality,
                                     step=self.trial_counter)

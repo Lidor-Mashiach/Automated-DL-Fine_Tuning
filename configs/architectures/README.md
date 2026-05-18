@@ -349,3 +349,23 @@ When `task_type="language_modeling"`, the LSTM YAML has 4 additional parameters 
 | `tie_weights` | bool | `false` | Tie output projection to embedding weights. Requires `hidden_size == embedding_dim`. Disabled by default. |
 
 For classification mode, these parameters exist but are silently ignored - the standard `_SequenceClassifier` is used instead of `_LSTMLanguageModel`.
+
+---
+
+## 🆕 New LM Parameters (Assignment 3 enhancements)
+
+Beyond the original LSTM-LM parameters, the YAML now exposes these tunable knobs:
+
+| Parameter | Type | Default | Choices/Range | Purpose |
+|---|---|---|---|---|
+| `sequence_length` | discrete | `32` | `[32, 64, 128, 256]` | Context window during training. Longer = more context, but harder gradient flow. Tuned by FTTS via `increase_sequence_length` / `decrease_sequence_length`. |
+| `teacher_forcing_ratio` | discrete | `1.0` | `[0.3, 0.5, 0.7, 1.0]` | Probability per training step of feeding the ground-truth previous word vs noise/own output. Lower = robust generation; higher = fast convergence. Tuned via `increase/decrease_teacher_forcing`. |
+| `max_words_per_line` | discrete | `12` | `[8, 10, 12, 16, 100]` | Hard constraint at generation: force `<line_sep>` if line reaches this length. Set 100 to effectively disable. |
+| `min_words_per_line` | discrete | `2` | `[0, 2, 3]` | Hard constraint at generation: suppress `<line_sep>` until line is at least this long. |
+| `bidirectional` | bool | `true` (cls) / `false` (LM auto) | `[true, false]` | LM cannot use bidirectional context for autoregressive generation. The Analyzer proposes `disable_bidirectional` if it sees bidirectional + LM. |
+
+### Analyzer actions triggered for LM
+
+When `task_type="language_modeling"`, the Analyzer can propose these LM-specific moves (in addition to the universal ones):
+- `slow` verdict → `unfreeze_embeddings`, `change_fusion_method`, `increase_sequence_length`, `decrease_teacher_forcing`, `increase_gradient_accumulation`
+- `overfit` verdict → `decrease_sequence_length`, `increase_teacher_forcing`, `disable_bidirectional`

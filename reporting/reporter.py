@@ -104,6 +104,12 @@ class Reporter:
             lines.append(f"    val_loss range      : {result.val_loss_curve[0]:.4f} "
                          f"-> {result.val_loss_curve[-1]:.4f} "
                          f"(min={min(result.val_loss_curve):.4f})")
+        if result.val_perplexity_curve:
+            # LM-specific: report perplexity alongside loss (loss is the
+            # optimization signal; perplexity is the standard human metric).
+            lines.append(f"    val_perplexity range: {result.val_perplexity_curve[0]:.2f} "
+                         f"-> {result.val_perplexity_curve[-1]:.2f} "
+                         f"(min={min(result.val_perplexity_curve):.2f})")
         lines.append(f"    duration (seconds)  : {result.duration_seconds:.1f}")
         if result.failure_reason:
             lines.append(f"    failure_reason      : {result.failure_reason}")

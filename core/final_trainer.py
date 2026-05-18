@@ -191,7 +191,7 @@ def _refit_and_eval(model, cfg, hp, data_info, cm, device):
     )
 
     # Build test loader from the saved Test_set.csv (local) or saved test ds
-    test_loader = _build_test_loader(cfg, data_info, batch_size, num_workers)
+    test_loader = _build_test_loader(cfg, data_info, batch_size, num_workers, hp)
 
     # Refit (no early stopping - we use the same epochs as the trial)
     epochs = int(hp.get("epochs") or 30)
@@ -225,12 +225,16 @@ def _refit_and_eval(model, cfg, hp, data_info, cm, device):
                   f"loss={tr_loss:.4f} metric={tr_metric:.4f}")
 
     # Evaluate on Test_set
-    test_loss, test_metric = _run_epoch(
-        model, test_loader, optimizer, loss_fn, device,
-        task_type, grad_clip, False,
-        grad_accum_steps=1, use_amp=False, scaler=None,
-    )
-    print(f"[final] Test results: loss={test_loss:.4f} metric={test_metric:.4f}")
+    if test_loader is None:
+        print("[final] No test loader available - skipping test evaluation.")
+        test_loss, test_metric = 0.0, 0.0
+    else:
+        test_loss, test_metric = _run_epoch(
+            model, test_loader, optimizer, loss_fn, device,
+            task_type, grad_clip, False,
+            grad_accum_steps=1, use_amp=False, scaler=None,
+        )
+        print(f"[final] Test results: loss={test_loss:.4f} metric={test_metric:.4f}")
 
     return test_metric, test_loss, {
         "train_loss": train_loss_curve,
@@ -244,6 +248,10 @@ def _make_loaders_for_refit(data_info, hp, cfg, num_workers):
     make_loaders, _ = load_data(cfg)
     batch_size = int(hp.get("batch_size", 64))
 
+    # Default seq_len: 32 for LM, 128 for other sequence tasks
+    default_seq = 32 if cfg.task_type == "language_modeling" else 128
+    seq_len = int(hp.get("sequence_length", default_seq))
+
     train_loader, val_loader = make_loaders(
         batch_size=batch_size,
         val_split=0.2,
@@ -252,7 +260,7 @@ def _make_loaders_for_refit(data_info, hp, cfg, num_workers):
         image_size=int(hp.get("image_size", 64)),
         augmentation=hp.get("data_augmentation", "none"),
         cutout=float(hp.get("cutout", 0.0)),
-        seq_len=int(hp.get("sequence_length", 128)),
+        seq_len=seq_len,
         text_augmentation=hp.get("text_augmentation", "none"),
         text_augmentation_prob=float(hp.get("text_augmentation_prob", 0.0)),
     )
@@ -264,14 +272,21 @@ def _combine_datasets(train_loader, val_loader):
     return ConcatDataset([train_loader.dataset, val_loader.dataset])
 
 
-def _build_test_loader(cfg, data_info, batch_size, num_workers):
+def _build_test_loader(cfg, data_info, batch_size, num_workers, hp=None):
     """
     Build a DataLoader for the held-out Test_set.
 
-    Local mode: use the saved Test_set.csv from the data split sub-folder.
-    Imported mode: use the original test split if available, else the random
+    Local mode (tabular): use the saved Test_set.csv from the data split sub-folder.
+    Imported mode (image): use the original test split if available, else the random
     test split that random_split produced earlier.
+    Language modeling: build a LyricsDataset from the held-out test_songs that
+    the lyrics_loader stored in data_info.
+
+    `hp` is the best-trial's hyperparameters; needed for LM to honor the chosen
+    sequence_length (which is a tunable hyperparameter, not part of data_info).
     """
+    if cfg.task_type == "language_modeling":
+        return _build_test_loader_lyrics(cfg, data_info, batch_size, num_workers, hp)
     if cfg.dataset_mode == "local" and data_info.get("data_type") == "tabular":
         return _build_test_loader_local_tabular(
             cfg, data_info, batch_size, num_workers
@@ -282,6 +297,48 @@ def _build_test_loader(cfg, data_info, batch_size, num_workers):
         )
     # Generic fallback
     return _build_test_loader_generic(cfg, data_info, batch_size, num_workers)
+
+
+def _build_test_loader_lyrics(cfg, data_info, batch_size, num_workers, hp=None):
+    """
+    Build a test DataLoader for language_modeling using the test_songs that
+    lyrics_loader already stored in data_info. We reuse LyricsDataset with the
+    same sequence_length and midi_variant that the run used.
+
+    If data_info is somehow missing the held-out test_songs (e.g. the orchestrator
+    re-instantiated data_info), we re-run the lyrics loader from cfg to recover.
+    """
+    from data_loaders.lyrics_loader import LyricsDataset
+    from torch.utils.data import DataLoader
+
+    test_songs = data_info.get("test_songs", [])
+    vocab = data_info.get("vocab")
+    midi_variant = data_info.get("midi_variant", cfg.midi_variant)
+    # Sequence length: take from the trained model's hp (it was tuned),
+    # not from data_info (which doesn't track it). Fall back to a sensible default.
+    if hp is not None and "sequence_length" in hp:
+        seq_len = int(hp["sequence_length"])
+    else:
+        seq_len = int(data_info.get("sequence_length", 32))
+
+    # Recovery path: re-load if anything is missing
+    if not test_songs or vocab is None:
+        print("[final] [WARN] Re-loading lyrics dataset to recover test split...")
+        from data_loaders.lyrics_loader import load_lyrics
+        _, recovered = load_lyrics(cfg)
+        test_songs = recovered.get("test_songs", [])
+        vocab = recovered.get("vocab")
+        if midi_variant is None:
+            midi_variant = recovered.get("midi_variant", cfg.midi_variant)
+
+    if not test_songs or vocab is None:
+        print("[final] [WARN] Could not build LM test loader - returning None. "
+              "Final-phase test evaluation will be skipped.")
+        return None
+
+    ds = LyricsDataset(test_songs, vocab, midi_variant, seq_len)
+    return DataLoader(ds, batch_size=batch_size, shuffle=False,
+                       num_workers=num_workers, drop_last=False)
 
 
 def _build_test_loader_local_tabular(cfg, data_info, batch_size, num_workers):

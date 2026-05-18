@@ -165,3 +165,34 @@ Built from training tokens; minimum frequency configurable via `--min_word_count
 
 ### Dataset class
 `LyricsDataset` returns `(input_ids, target_ids, midi_features)` per item. The trainer detects 3-tuple batches and routes them to the LM forward path.
+
+---
+
+## 🎛️ Teacher Forcing & Line-Length Controls
+
+Two LM-specific hyperparameters affect how lyrics are produced — one at training time, two at generation time.
+
+### `teacher_forcing_ratio` (training-time)
+
+Pure parallel-LSTM training feeds the ground-truth previous token at every step (`tf_ratio=1.0`). This is fast but creates a train/test mismatch: at generation, the model sees its own outputs, which may diverge from clean ground-truth.
+
+The trainer implements a pragmatic approximation: with probability `(1 - tf_ratio)`, individual input tokens are replaced by `<unk>`, forcing the model to learn how to recover from noisy context. Lower values = more robust generation but slower convergence.
+
+| Value | Behavior |
+|---|---|
+| `1.0` | Always feed ground truth (classic LM training). |
+| `0.7` | 30% of input tokens dropped to `<unk>`. |
+| `0.5` | 50% — model relies more on its own representations. |
+| `0.3` | Aggressive — exposes model to substantial noise. |
+
+Applied only during training (`is_train=True`); validation always uses `tf_ratio=1.0`.
+
+### `max_words_per_line` and `min_words_per_line` (generation-time)
+
+Hard constraints applied in `generate_lyrics()`:
+- **`max_words_per_line`**: if the current line reaches this length without sampling `<line_sep>`, the generator forces the next token to be `<line_sep>`.
+- **`min_words_per_line`**: if the model samples `<line_sep>` before the line has this many words, the separator's logit is set to `-inf` and a different token is sampled.
+
+These are deterministic constraints, not loss-based — they only influence generation, not training, and don't require retraining when changed.
+
+The defaults (`max=12`, `min=2`) match typical pop-song line lengths. The Analyzer doesn't propose actions for these since they're generation hyperparameters, not training ones.

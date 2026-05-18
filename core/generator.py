@@ -39,6 +39,8 @@ def generate_lyrics(
     sampling_kwargs: dict = None,
     line_separator_token: str = "&",
     stop_on_eos: bool = True,
+    max_words_per_line: int = 100,
+    min_words_per_line: int = 0,
 ) -> list[str]:
     """
     Generate a lyrics sequence starting from initial_word.
@@ -56,6 +58,10 @@ def generate_lyrics(
         sampling_kwargs: additional kwargs for the sampling strategy
         line_separator_token: token marking end-of-line (kept in output)
         stop_on_eos: stop generation if <eos> is sampled
+        max_words_per_line: if a line reaches this length without a separator,
+                            forcibly insert one.
+        min_words_per_line: if a separator is sampled before this many words,
+                            suppress it and resample.
 
     Returns: list of generated tokens (does not include initial_word).
     """
@@ -81,19 +87,49 @@ def generate_lyrics(
         step = min(step, feats.shape[0] - 1)
         return torch.from_numpy(feats[step]).float().unsqueeze(0).to(device)
 
+    line_sep_idx = vocab.stoi.get(line_separator_token, None)
+    words_since_separator = 0
+
     with torch.no_grad():
         for step in range(max_words):
             midi_feat = get_midi_for_step(step)
             logits, hidden = model.step(current_id, midi_feat, hidden)
             # logits: (1, V)
-            next_id = sample_token(sampling_strategy, logits.squeeze(0),
-                                     **sampling_kwargs)
-            next_idx = int(next_id.item())
+
+            # Line-length constraints
+            if line_sep_idx is not None:
+                # If we've reached max_words_per_line without a separator,
+                # force the next token to be the separator.
+                if words_since_separator >= max_words_per_line:
+                    next_idx = line_sep_idx
+                else:
+                    # If we haven't reached min_words_per_line, suppress
+                    # the separator by setting its logit to -inf.
+                    if words_since_separator < min_words_per_line:
+                        logits_modified = logits.clone()
+                        logits_modified[0, line_sep_idx] = float("-inf")
+                    else:
+                        logits_modified = logits
+                    next_id = sample_token(sampling_strategy,
+                                            logits_modified.squeeze(0),
+                                            **sampling_kwargs)
+                    next_idx = int(next_id.item())
+            else:
+                next_id = sample_token(sampling_strategy, logits.squeeze(0),
+                                         **sampling_kwargs)
+                next_idx = int(next_id.item())
 
             if stop_on_eos and next_idx == vocab.eos_idx:
                 break
 
             generated.append(vocab.itos[next_idx])
+
+            # Track distance from last separator
+            if next_idx == line_sep_idx:
+                words_since_separator = 0
+            else:
+                words_since_separator += 1
+
             current_id = torch.tensor([next_idx], dtype=torch.long, device=device)
 
     return generated

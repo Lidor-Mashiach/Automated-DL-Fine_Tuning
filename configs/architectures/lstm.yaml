@@ -31,9 +31,15 @@ parameters:
 
 architectures:
 
+  # bidirectional
+  # -------------
+  # Bidirectional LSTM reads sequences forward AND backward. Useful for
+  # classification, but INCOMPATIBLE WITH GENERATION (the model would peek
+  # at future tokens). For language_modeling, MUST be false.
+  # The analyzer can suggest `disable_bidirectional` if generation is the goal.
   bidirectional:
     enabled: true
-    initial_value: true
+    initial_value: false
     choices: [true, false]
 
 
@@ -96,9 +102,15 @@ training:
     enabled: true
     initial_value: 0.2
 
+  # sequence_length
+  # ---------------
+  # Length of token windows fed to the LSTM. Critical for language_modeling:
+  # longer = more context, but harder gradient flow.
+  # The analyzer can suggest increase_sequence_length / decrease_sequence_length.
   sequence_length:
     enabled: true
-    initial_value: 128
+    initial_value: 32
+    choices: [32, 64, 128, 256]
 
   # loss_function - see configs/architectures/mlp.yaml for full docs
   loss_function:
@@ -233,3 +245,41 @@ training:
     enabled: false
     initial_value: false
     choices: [true, false]
+
+
+# =============================================================================
+# Language modeling - decoding & sequence behavior
+# =============================================================================
+
+  # teacher_forcing_ratio
+  # ---------------------
+  # Probability (per training step) of feeding the GROUND-TRUTH previous word
+  # instead of the model's own prediction. Used only during training.
+  #   1.0 = always ground truth (classic LM training - fastest convergence)
+  #   0.5 = mixed (model learns to recover from its own errors)
+  #   0.0 = always model output (scheduled sampling - matches inference)
+  # Lower values trade convergence speed for generation robustness.
+  teacher_forcing_ratio:
+    enabled: true
+    initial_value: 1.0
+    choices: [0.3, 0.5, 0.7, 1.0]
+
+  # max_words_per_line
+  # ------------------
+  # Soft upper bound: training adds a small loss penalty when the model
+  # produces more than this many tokens between two line-separator tokens.
+  # Encourages the model to break lines at musically reasonable points.
+  # Set to a high value (e.g. 100) to effectively disable.
+  max_words_per_line:
+    enabled: true
+    initial_value: 12
+    choices: [8, 10, 12, 16, 100]
+
+  # min_words_per_line
+  # ------------------
+  # Soft lower bound: training adds a small loss penalty when the model
+  # produces a line shorter than this. Set to 0 to disable.
+  min_words_per_line:
+    enabled: true
+    initial_value: 2
+    choices: [0, 2, 3]

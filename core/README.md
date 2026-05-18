@@ -213,3 +213,29 @@ The user can:
 - Edit a path constant at the top to point elsewhere.
 
 The script trains end-to-end OR loads `model_checkpoint.pt` if present (skipping training), then generates lyrics on the test split with the chosen sampling strategy.
+
+---
+
+## 📊 Perplexity as a reported metric (LM)
+
+For `task_type="language_modeling"`, the trainer records `val_perplexity = exp(val_loss)` per epoch in `TrialResult.val_perplexity_curve`. Why both?
+
+- **Loss** is the optimization signal — what backprop minimizes — and the `quality_score` is computed from it.
+- **Perplexity** is the human-readable interpretation. PPL=20 means "the model is as confused as if it had to pick uniformly from 20 words at each step." Lower is better.
+
+Where it appears:
+- Per-epoch console log: `loss=2.41  ppl=11.13`
+- `report.txt`: `val_perplexity range: 1234.56 -> 42.31 (min=38.20)`
+- TensorBoard: `<trial_id>/val_perplexity` scalar curve
+- `report.txt` final summary: best perplexity for the winning trial
+
+Loss and perplexity are monotonically related (`ppl = e^loss`), so they always agree on ranking. The reason to report both is convention — the Assignment 3 expects perplexity numbers in the writeup, but the search is driven by loss.
+
+## 🎼 LM-specific trainer additions
+
+The trainer's `_run_epoch` accepts two extra parameters for language modeling:
+
+- `tf_ratio` (default `1.0`) — teacher forcing ratio, applied as input-token dropout to `<unk>` during training. Pulled from `hp["teacher_forcing_ratio"]`.
+- `unk_idx` (default `1`) — the `<unk>` token's vocab index, used when dropping inputs. Pulled from `data_info["vocab"].unk_idx`.
+
+Both default to safe values (no perturbation) so non-LM tasks are unaffected.

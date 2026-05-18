@@ -122,6 +122,7 @@ class TrialResult:
     val_loss_curve: list[float] = field(default_factory=list)
     train_metric_curve: list[float] = field(default_factory=list)
     val_metric_curve: list[float] = field(default_factory=list)
+    val_perplexity_curve: list[float] = field(default_factory=list)
     duration_seconds: float = 0.0
     failure_reason: str | None = None
     epochs_completed: int = 0
@@ -252,7 +253,8 @@ def _run_epoch(model, loader, optimizer, loss_fn, device, task_type,
                grad_clip, is_train, grad_accum_steps: int = 1,
                use_amp: bool = False, scaler=None,
                cutmix_alpha: float = 0.0, mixup_alpha: float = 0.0,
-               num_classes: int = 0):
+               num_classes: int = 0,
+               tf_ratio: float = 1.0, unk_idx: int = 1):
     """Run one epoch.
 
     Args:
@@ -292,6 +294,15 @@ def _run_epoch(model, loader, optimizer, loss_fn, device, task_type,
 
             if is_lm:
                 yb_loss = yb  # (B, T) int targets
+                # Teacher forcing simulation via input dropout: with probability
+                # (1 - tf_ratio), replace a fraction of input tokens with <unk>
+                # to expose the model to noisy/own-prediction-like contexts.
+                # Pure parallel LSTMs can't do true scheduled sampling without
+                # going step-by-step; this is a pragmatic approximation.
+                if is_train and tf_ratio < 1.0:
+                    drop_prob = 1.0 - tf_ratio
+                    mask = (torch.rand_like(xb.float()) < drop_prob)
+                    xb = torch.where(mask, torch.full_like(xb, unk_idx), xb)
             elif task_type == "regression":
                 yb_loss = yb.float().view(-1, 1)
             else:
@@ -410,14 +421,16 @@ def train_trial(
         extra_loader_kwargs["image_size"] = int(hp.get("image_size", 64))
         extra_loader_kwargs["augmentation"] = hp.get("data_augmentation", "none")
         extra_loader_kwargs["cutout"] = float(hp.get("cutout", 0.0))
-    elif data_info.get("data_type") == "text":
+    elif data_info.get("data_type") in ("text", "lyrics"):
         extra_loader_kwargs["seq_len"] = int(hp.get(
-            "sequence_length", data_info.get("default_seq_len", 128)
+            "sequence_length", data_info.get("default_seq_len", 32)
         ))
-        extra_loader_kwargs["text_augmentation"] = hp.get("text_augmentation", "none")
-        extra_loader_kwargs["text_augmentation_prob"] = float(
-            hp.get("text_augmentation_prob", 0.0)
-        )
+        # text augmentation only applies to plain text classification, not LM
+        if data_info.get("data_type") == "text":
+            extra_loader_kwargs["text_augmentation"] = hp.get("text_augmentation", "none")
+            extra_loader_kwargs["text_augmentation_prob"] = float(
+                hp.get("text_augmentation_prob", 0.0)
+            )
 
     try:
         train_loader, val_loader = make_loaders(
@@ -442,6 +455,10 @@ def train_trial(
     grad_accum_steps = max(1, int(hp.get("gradient_accumulation_steps", 1)))
     cutmix_alpha = float(hp.get("cutmix", 0.0))
     mixup_alpha = float(hp.get("mixup", 0.0))
+    # LM-specific (used only when task_type == "language_modeling")
+    teacher_forcing_ratio = float(hp.get("teacher_forcing_ratio", 1.0))
+    max_words_per_line = int(hp.get("max_words_per_line", 100))
+    min_words_per_line = int(hp.get("min_words_per_line", 0))
     num_classes = int(data_info.get("output_dim", 0))
 
     result = TrialResult(
@@ -468,11 +485,17 @@ def train_trial(
                 use_amp=use_amp, scaler=scaler,
                 cutmix_alpha=cutmix_alpha, mixup_alpha=mixup_alpha,
                 num_classes=num_classes,
+                tf_ratio=teacher_forcing_ratio,
+                unk_idx=(data_info["vocab"].unk_idx
+                         if task_type == "language_modeling" and data_info.get("vocab")
+                         else 1),
             )
             val_loss, val_metric = _run_epoch(
                 model, val_loader, optimizer, loss_fn, device,
                 task_type, grad_clip, False,
                 grad_accum_steps=1, use_amp=False, scaler=None,
+                tf_ratio=1.0,  # never apply teacher forcing perturbation on val
+                unk_idx=1,
             )
 
             if not math.isfinite(tr_loss) or not math.isfinite(val_loss):
@@ -484,12 +507,22 @@ def train_trial(
             result.val_loss_curve.append(val_loss)
             result.train_metric_curve.append(tr_metric)
             result.val_metric_curve.append(val_metric)
+            if task_type == "language_modeling":
+                ppl = math.exp(val_loss) if val_loss < 20 else float("inf")
+                result.val_perplexity_curve.append(ppl)
             result.epochs_completed = epoch + 1
 
             # Compact per-epoch progress log (every 5 epochs, plus last)
             if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
-                print(f"[{trial_id}]   epoch {epoch+1:>3}/{epochs}  "
-                      f"loss={val_loss:.4f}  metric={val_metric:.4f}")
+                if task_type == "language_modeling":
+                    # Perplexity = exp(loss). Loss is the optimization signal;
+                    # perplexity is the human-friendly metric for LM.
+                    ppl = math.exp(val_loss) if val_loss < 20 else float("inf")
+                    print(f"[{trial_id}]   epoch {epoch+1:>3}/{epochs}  "
+                          f"loss={val_loss:.4f}  ppl={ppl:.2f}")
+                else:
+                    print(f"[{trial_id}]   epoch {epoch+1:>3}/{epochs}  "
+                          f"loss={val_loss:.4f}  metric={val_metric:.4f}")
 
             # Smoothed early stopping
             smoothed = moving_average(result.val_loss_curve, smoothing_window)

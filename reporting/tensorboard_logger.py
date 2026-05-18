@@ -42,8 +42,13 @@ class TensorBoardLogger:
             pass
 
     def log_trial_curves(self, trial_id: str, train_loss: list, val_loss: list,
-                          train_metric: list = None, val_metric: list = None) -> None:
-        """Log a full trial's curves under a tag prefix."""
+                          train_metric: list = None, val_metric: list = None,
+                          task_type: str = None) -> None:
+        """Log a full trial's curves under a tag prefix.
+
+        For language_modeling, also logs val/perplexity = exp(val_loss) at every
+        epoch (loss is the optimization signal; perplexity is the human metric).
+        """
         if not self.enabled or self.writer is None:
             return
         for i, v in enumerate(train_loss):
@@ -56,6 +61,11 @@ class TensorBoardLogger:
         if val_metric:
             for i, v in enumerate(val_metric):
                 self.log_scalar(f"{trial_id}/val_metric", v, i)
+        if task_type == "language_modeling":
+            import math
+            for i, v in enumerate(val_loss):
+                ppl = math.exp(v) if v < 20 else float("inf")
+                self.log_scalar(f"{trial_id}/val_perplexity", ppl, i)
 
     def close(self) -> None:
         if self.writer is not None:

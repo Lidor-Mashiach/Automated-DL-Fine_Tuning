@@ -64,6 +64,9 @@ ACTION_TYPES = {
     "adjust_adam_beta1", "adjust_adam_beta2",
     # language modeling (NLP-specific)
     "unfreeze_embeddings", "change_fusion_method",
+    "increase_sequence_length", "decrease_sequence_length",
+    "increase_teacher_forcing", "decrease_teacher_forcing",
+    "disable_bidirectional", "increase_gradient_accumulation",
 }
 
 
@@ -463,6 +466,30 @@ def _add_overfit(diag: Diagnosis, cm):
             type="reduce_width",
             reason="Smaller model generalizes better.", priority=0.4,
         ))
+    # Language modeling overfit actions
+    if _is_tunable(cm, "sequence_length"):
+        diag.actions.append(Action(
+            type="decrease_sequence_length",
+            reason="Shorter sequences expose less per-step context - acts "
+                   "as implicit regularizer for LM.",
+            target_param="sequence_length", priority=0.35,
+        ))
+    if _is_tunable(cm, "teacher_forcing_ratio"):
+        diag.actions.append(Action(
+            type="increase_teacher_forcing",
+            reason="Higher teacher forcing stabilizes training; pair with "
+                   "regularization elsewhere.",
+            target_param="teacher_forcing_ratio",
+            suggested_value=1.0, priority=0.25,
+        ))
+    if _is_tunable(cm, "bidirectional"):
+        diag.actions.append(Action(
+            type="disable_bidirectional",
+            reason="Bidirectional LSTM cannot be used for left-to-right "
+                   "generation; disable for proper LM training.",
+            target_param="bidirectional",
+            suggested_value=False, priority=0.60,
+        ))
     # Context-aware layer-shape suggestions
     _propose_layer_shapes(diag, cm, verdict="overfit",
                            current_shape=_current_value_safe(cm, "layer_shape"))
@@ -574,6 +601,29 @@ def _add_slow(diag: Diagnosis, cm):
             reason="Switch fusion strategy (e.g. project instead of concatenate) "
                    "to learn a better text-MIDI combination (LM-specific).",
             target_param="fusion_method", priority=0.35,
+        ))
+    # Language modeling: longer context window
+    if _is_tunable(cm, "sequence_length"):
+        diag.actions.append(Action(
+            type="increase_sequence_length",
+            reason="Longer sequences expose more context; may help LM training.",
+            target_param="sequence_length", priority=0.40,
+        ))
+    # Language modeling: schedule-sampling-like teacher forcing
+    if _is_tunable(cm, "teacher_forcing_ratio"):
+        diag.actions.append(Action(
+            type="decrease_teacher_forcing",
+            reason="Lower teacher forcing exposes the model to its own outputs "
+                   "during training, improving generation robustness.",
+            target_param="teacher_forcing_ratio", priority=0.35,
+        ))
+    # Language modeling: gradient accumulation for long sequences + small batch
+    if _is_tunable(cm, "gradient_accumulation_steps"):
+        diag.actions.append(Action(
+            type="increase_gradient_accumulation",
+            reason="Effective larger batch via accumulation; useful for LM with "
+                   "long sequences and small device batches.",
+            target_param="gradient_accumulation_steps", priority=0.30,
         ))
     # Context-aware layer-shape suggestions
     _propose_layer_shapes(diag, cm, verdict="slow",
