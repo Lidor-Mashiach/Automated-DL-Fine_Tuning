@@ -76,13 +76,13 @@ stopping:
   # max_trials
   # ----------
   # Upper bound on the total number of trials. null = no limit.
-  max_trials: 50
+  max_trials: 200
 
   # time_limit_minutes
   # ------------------
   # Soft upper bound in wall-clock minutes. The run finishes the current
   # trial and stops once this is exceeded. null = no limit.
-  time_limit_minutes: null
+  time_limit_minutes: 4080
 
   # target_accuracy
   # ---------------
