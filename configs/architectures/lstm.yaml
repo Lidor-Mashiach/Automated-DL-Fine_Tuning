@@ -12,8 +12,8 @@ parameters:
   # Size of the LSTM hidden state. Wider than vanilla RNN can typically afford.
   hidden_size:
     enabled: true
-    initial_value: 128
-    choices: [64, 128, 256, 512]
+    initial_value: 256
+    choices: [32, 64, 128, 256, 512, 1024]
 
   # num_layers
   # ----------
@@ -109,8 +109,8 @@ training:
   # The analyzer can suggest increase_sequence_length / decrease_sequence_length.
   sequence_length:
     enabled: true
-    initial_value: 32
-    choices: [32, 64, 128, 256]
+    initial_value: 128
+    choices: [32, 64, 128, 256, 512]
 
   # loss_function - see configs/architectures/mlp.yaml for full docs
   loss_function:

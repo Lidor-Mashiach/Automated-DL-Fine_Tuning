@@ -411,22 +411,15 @@ class FTTS:
         if t == "change_fusion_method":
             return self._cycle_choice(hp, "fusion_method")
         if t == "increase_sequence_length":
-            return self._adjust_additive(hp, "sequence_length",
-                                          delta_sign=+1, action_type=t)
+            return self._adjust_choice_param(hp, ["sequence_length"], direction=+1)
         if t == "decrease_sequence_length":
-            return self._adjust_additive(hp, "sequence_length",
-                                          delta_sign=-1, action_type=t)
+            return self._adjust_choice_param(hp, ["sequence_length"], direction=-1)
         if t == "increase_teacher_forcing":
-            return self._adjust_additive(hp, "teacher_forcing_ratio",
-                                          delta_sign=+1, action_type=t)
+            return self._adjust_choice_param(hp, ["teacher_forcing_ratio"], direction=+1)
         if t == "decrease_teacher_forcing":
-            return self._adjust_additive(hp, "teacher_forcing_ratio",
-                                          delta_sign=-1, action_type=t)
+            return self._adjust_choice_param(hp, ["teacher_forcing_ratio"], direction=-1)
         if t == "disable_bidirectional":
             return self._set_value(hp, "bidirectional", False)
-        if t == "increase_gradient_accumulation":
-            return self._adjust_additive(hp, "gradient_accumulation_steps",
-                                          delta_sign=+1, action_type=t)
 
         return None
 

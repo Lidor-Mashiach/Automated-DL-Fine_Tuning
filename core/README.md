@@ -239,3 +239,94 @@ The trainer's `_run_epoch` accepts two extra parameters for language modeling:
 - `unk_idx` (default `1`) — the `<unk>` token's vocab index, used when dropping inputs. Pulled from `data_info["vocab"].unk_idx`.
 
 Both default to safe values (no perturbation) so non-LM tasks are unaffected.
+
+---
+
+## 🔥 Warm Start (continue tuning from a checkpoint)
+
+When `--warm_start_checkpoint <path>` is passed in `tune` mode, the orchestrator loads the checkpoint's weights into the model **before T0001** instead of using random initialization.
+
+### When to use
+- Previous run produced a promising model but you have more compute budget
+- You want to continue from a known-good baseline rather than restart
+- Resuming after an interrupted run (use the run's `final/model_checkpoint.pt`)
+
+### Behavior
+- Applied **only at T0001**. T0002+ rebuild from FTTS-mutated hyperparameters and re-initialize naturally - if the FTTS changed `hidden_size` for T0002, the checkpoint weights wouldn't match anyway.
+- Uses `strict=False`: parameters that don't match (different vocab size, different fusion layers, etc.) are reported but skipped.
+- Failures are non-fatal: missing checkpoint or load error logs a warning and proceeds with random init.
+
+### Example
+```bash
+# Continue tuning ex1 from its best trial
+python main.py \
+  --architecture lstm \
+  --task_type language_modeling \
+  --data_type lyrics \
+  --local_dataset_path ./Data/lyrics_train_set.csv \
+  --word2vec_path ./word2vec.bin \
+  --run_name ex1_continued \
+  --warm_start_checkpoint ./experiments/ex1_baseline_*/final/model_checkpoint.pt
+```
+
+### What it does NOT do
+- Does not preserve optimizer state - the new optimizer is fresh
+- Does not preserve the FTTS tree - exploration starts from T0001
+- Does not skip training - T0001 still trains, just from better weights
+
+---
+
+## 🧭 Complete Analyzer Verdict → Actions Map
+
+After the empirical-analysis pass, every ACTION_TYPE is emitted by at least one verdict. The full picture:
+
+### `failed_to_learn` (loss not decreasing)
+- `increase_lr` (0.85), `increase_sequence_length` (0.80, LM)
+- `add_width` (0.70), `unfreeze_embeddings` (0.65, LM), `add_depth` (0.60)
+- `enable_batch_norm` (0.55), `change_normalization` (0.50)
+- `change_activation` (0.45), `change_optimizer` (0.35)
+- + layer_shape suggestions
+
+### `slow` (learning but slowly)
+- `increase_lr` (0.80), `increase_sequence_length` (0.78, LM)
+- `decrease_teacher_forcing` (0.70, LM), `unfreeze_embeddings` (0.65, LM)
+- `reduce_batch_size` (0.60), `add_width` (0.55)
+- `enable_mixed_precision` (0.50), `decrease_dropout` (0.45)
+- `increase_batch_size` (0.40), `increase_grad_accumulation` (0.35)
+- `change_fusion_method` (0.35, LM), `change_optimizer` (0.30)
+- `adjust_attention_dropout` (0.30)
+- `adjust_adam_beta1` (0.15), `adjust_adam_beta2` (0.15) [advanced, off-by-default]
+
+### `healthy` (good training, can polish)
+- `decrease_teacher_forcing` (0.70, LM)  ← top
+- `decrease_lr` (0.60), `increase_lr` (0.50)
+- `increase_dropout` (0.50), `increase_teacher_forcing` (0.50, LM)
+- `add_width` (0.45)
+- `increase_focal_gamma` (0.35), `decrease_focal_gamma` (0.30)
+- `try_cross_entropy` (0.20)
+
+### `overfit` (val diverging from train)
+- `increase_dropout` (0.85), `increase_weight_decay` (0.80)
+- `increase_augmentation` (0.70), `disable_bidirectional` (0.60, LM)
+- `enable_mixup` (0.60), `enable_cutout` (0.55)
+- `increase_stochastic_depth` (0.55), `enable_label_smoothing` (0.55)
+- `enable_cutmix` (0.50), `increase_embedding_dropout` (0.50)
+- `change_text_augmentation` (0.45), `reduce_width` (0.40)
+- `increase_text_augmentation` (0.40), `reduce_depth` (0.35)
+- `decrease_sequence_length` (0.35, LM)
+- `toggle_bidirectional` (0.30), `try_focal_loss` (0.25)
+- `increase_teacher_forcing` (0.25, LM)
+
+### `fast` (converged too fast, may be unstable)
+- `decrease_lr` (0.90), `add_lr_scheduler` (0.80)
+- `increase_warmup` (0.70), `increase_dropout` (0.60)
+
+### `converged` (plateaued, polish only)
+- `add_width` (0.50), `decrease_weight_decay` (0.45)
+- `change_activation` (0.30)
+
+### `diverged` (loss became NaN/Inf)
+- `decrease_lr` (0.95), `add_gradient_clipping` (0.85)
+- (emitted in `analyze()` top-level, not in `_add_*`)
+
+Each action is gated by `_is_tunable(cm, param)` — if the parameter is disabled in the architecture's YAML, the action is silently skipped.

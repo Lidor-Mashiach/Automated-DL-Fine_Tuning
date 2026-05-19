@@ -10,7 +10,7 @@ The framework runs a series of experiments, analyzes what happened in each one (
 
 - 🏗️ **5 architectures out of the box** — MLP, CNN, RNN, LSTM, Transformer.
 - 🎵 **Language modeling mode** — train an LSTM on lyrics (Word2Vec + MIDI features), generate text with 4 sampling strategies, and probe melody influence.
-- 🧪 **Smart Analyzer** — diagnoses training curves and proposes prioritized actions.
+- 🧪 **Smart Analyzer** — diagnoses training curves and proposes prioritized actions across 7 verdicts. **Every one of 50 ACTION_TYPES is reachable through some verdict** (no dead actions).
 - 🌳 **FTTS (Fine-Tuning Tree Search)** — tree-based search with backtracking, adaptive step sizes, and **DAG deduplication** (skips already-explored hyperparameter combinations).
 - 🎯 **Context-aware layer shape selection (MLP)** — Analyzer picks the right pattern (uniform / funnel / pyramid / hourglass / bottleneck) based on the verdict; user doesn't have to choose manually.
 - 🔄 **Multiple search strategies** — FTTS (default), Bayesian (Optuna), Grid search.

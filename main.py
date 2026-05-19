@@ -141,6 +141,12 @@ MODE = "tune"
 # CHECKPOINT_PATH (mode=generate only): path to model_checkpoint.pt
 CHECKPOINT_PATH = None
 
+# WARM_START_CHECKPOINT (mode=tune): if provided, load weights from this
+# checkpoint as the starting point for the first trial (T0001), instead of
+# random initialization. Useful for continuing tuning from a previously
+# trained model. The checkpoint must match the architecture being tuned.
+WARM_START_CHECKPOINT = None
+
 # INITIAL_WORDS (mode=generate, or override at end of tune):
 # List of starting words. None = use ["love", "the", "i"] as defaults.
 INITIAL_WORDS = None
@@ -257,6 +263,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoint", "--checkpoint_path", dest="checkpoint_path",
                     type=_str_or_none, default=CHECKPOINT_PATH,
                     help="For mode=generate: path to model_checkpoint.pt")
+    p.add_argument("--warm_start_checkpoint", type=_str_or_none,
+                    default=WARM_START_CHECKPOINT,
+                    help="For mode=tune: load weights from this checkpoint "
+                         "before T0001 (continue tuning from a trained model).")
     p.add_argument("--initial_words", nargs="+", default=INITIAL_WORDS,
                     help="Space-separated starting words for generation.")
     p.add_argument("--sampling_strategy", default=SAMPLING_STRATEGY,
@@ -319,6 +329,7 @@ def build_run_config(args) -> RunConfig:
         # Generation mode
         mode=args.mode,
         checkpoint_path=args.checkpoint_path,
+        warm_start_checkpoint=args.warm_start_checkpoint,
         initial_words=args.initial_words,
         sampling_strategy=args.sampling_strategy,
         sampling_temperature=args.sampling_temperature,

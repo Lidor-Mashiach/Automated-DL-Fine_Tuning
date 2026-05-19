@@ -249,6 +249,14 @@ class Orchestrator:
         """Build model, train, analyze, score, report, plot, update stats."""
         try:
             model = build_model(self.cfg.architecture, hp, self.data_info)
+
+            # Warm start: load weights from a previous checkpoint before the
+            # FIRST trial only. Subsequent trials must re-randomize so the
+            # FTTS exploration isn't biased by leftover gradients.
+            if (self.trial_counter == 0
+                    and getattr(self.cfg, "warm_start_checkpoint", None)):
+                self._load_warm_start(model, self.cfg.warm_start_checkpoint)
+
             # Prefer hp value (allows future actions to tune epochs);
             # fall back to YAML initial_value, then 30.
             if "epochs" in hp:
@@ -438,6 +446,38 @@ class Orchestrator:
         torch.manual_seed(self.cfg.random_seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.cfg.random_seed)
+
+    def _load_warm_start(self, model, checkpoint_path: str) -> None:
+        """
+        Load weights from a checkpoint into `model` before the first trial.
+
+        Used for `--warm_start_checkpoint` (mode=tune): continue tuning from
+        a previously trained model instead of random initialization.
+
+        Loads with strict=False so a slightly different vocabulary or
+        architecture doesn't crash - parameters that don't match are reported
+        but skipped.
+        """
+        from pathlib import Path
+        path = Path(checkpoint_path)
+        if not path.exists():
+            print(f"[orchestrator] [WARN] warm_start_checkpoint not found: {path}. "
+                  f"Proceeding with random init.")
+            return
+        try:
+            ckpt = torch.load(path, map_location=self.device)
+            state_dict = ckpt.get("state_dict", ckpt)
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            print(f"[orchestrator] Warm start: loaded {checkpoint_path}")
+            if missing:
+                print(f"[orchestrator]   missing keys (random init): "
+                      f"{len(missing)} (e.g. {list(missing)[:3]})")
+            if unexpected:
+                print(f"[orchestrator]   unexpected keys (ignored): "
+                      f"{len(unexpected)} (e.g. {list(unexpected)[:3]})")
+        except Exception as e:
+            print(f"[orchestrator] [WARN] warm_start load failed ({e}). "
+                  f"Proceeding with random init.")
 
     def _finalize(self):
         summary = self._summary()

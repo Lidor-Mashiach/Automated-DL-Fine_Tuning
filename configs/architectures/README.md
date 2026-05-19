@@ -369,3 +369,48 @@ Beyond the original LSTM-LM parameters, the YAML now exposes these tunable knobs
 When `task_type="language_modeling"`, the Analyzer can propose these LM-specific moves (in addition to the universal ones):
 - `slow` verdict → `unfreeze_embeddings`, `change_fusion_method`, `increase_sequence_length`, `decrease_teacher_forcing`, `increase_gradient_accumulation`
 - `overfit` verdict → `decrease_sequence_length`, `increase_teacher_forcing`, `disable_bidirectional`
+
+---
+
+## 🔧 LSTM YAML defaults updated (post-empirical analysis)
+
+After the first lyrics-generation run, the LSTM YAML was tuned with two complementary moves:
+
+**1. Initial values moved to the middle of the explored range.**
+The first run started with `hidden_size=128` and `sequence_length=32` - both at the **low end** of what's reasonable for LM. This biased the early FTTS exploration toward "small model" trials. Moving the starts to the middle lets the analyzer explore upward AND downward.
+
+**2. choices widened, not narrowed.**
+Rather than restricting the search to "good" values, the range was widened in both directions. The analyzer's adaptive-step logic decides which direction to go based on the verdict.
+
+| Parameter | Old initial | New initial | Old choices | New choices |
+|---|---|---|---|---|
+| `hidden_size` | 128 | **256** | `[64, 128, 256, 512]` | **`[32, 64, 128, 256, 512, 1024]`** |
+| `sequence_length` | 32 | **128** | `[32, 64, 128, 256]` | **`[32, 64, 128, 256, 512]`** |
+
+### Why widen instead of narrow?
+- `hidden_size=32/64` is sometimes the right answer for tiny corpora or fast experimentation. Keep it available.
+- `hidden_size=1024` is useful for runs with abundant GPU memory and large vocabularies.
+- `sequence_length=512` lets the model learn long-range structure (multi-verse coherence) when memory allows.
+- The analyzer's `increase_X` / `decrease_X` actions navigate the choices list step by step, so a wider list just means more exploration room, not slower convergence.
+
+These changes affect only the **initial** trial (T0001) and the search space. FTTS can still reach any value within the choices list during exploration.
+
+---
+
+## 🆕 Analyzer Action Coverage Expansion
+
+Empirical analysis revealed 9 ACTION_TYPES that had FTTS handlers but were **never emitted** by any verdict — they existed in code but were dead in practice. After expansion, every action is reachable through the analyzer:
+
+| Action | Verdict | Priority | When triggered |
+|---|---|---|---|
+| `decrease_dropout` | `slow` | 0.45 | Model not learning - try less regularization |
+| `increase_batch_size` | `slow` | 0.40 | Large batches can stabilize tricky losses |
+| `enable_batch_norm` | `failed_to_learn` | 0.55 | Stabilize gradients when training fails to start |
+| `change_normalization` | `failed_to_learn` | 0.50 | Input normalization strategy may be wrong |
+| `reduce_depth` | `overfit` | 0.35 | Reduce model capacity |
+| `toggle_bidirectional` | `overfit` | 0.30 | Test whether bi-LSTM is hurting generalization |
+| `adjust_attention_dropout` | `slow` | 0.30 | Transformer-specific dropout tuning |
+| `adjust_adam_beta1` | `slow` | 0.15 | Advanced Adam momentum tuning (off-by-default) |
+| `adjust_adam_beta2` | `slow` | 0.15 | Advanced Adam squared-gradient tuning (off-by-default) |
+
+Note: the `adjust_adam_beta1/2` actions are emitted only when those parameters are explicitly enabled in YAML (default is `enabled: false`).

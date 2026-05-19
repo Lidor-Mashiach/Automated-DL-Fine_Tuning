@@ -12,6 +12,48 @@ spikes don't mislead the diagnosis.
 
 Each action has `priority` in [0, 1] reflecting Analyzer confidence. FTTS
 uses it in: child_score = parent_quality * action_priority.
+
+Verdict -> top emitted actions (sorted by priority):
+  failed_to_learn:  increase_lr (0.85), increase_sequence_length (0.80, LM),
+                    add_width (0.70), unfreeze_embeddings (0.65, LM),
+                    add_depth (0.60), enable_batch_norm (0.55),
+                    change_normalization (0.50), change_activation (0.45),
+                    change_optimizer (0.35)
+  slow:             increase_lr (0.80), increase_sequence_length (0.78, LM),
+                    decrease_teacher_forcing (0.70, LM),
+                    unfreeze_embeddings (0.65, LM), reduce_batch_size (0.60),
+                    add_width (0.55), enable_mixed_precision (0.50),
+                    decrease_dropout (0.45), increase_batch_size (0.40),
+                    increase_grad_accumulation (0.35),
+                    change_fusion_method (0.35, LM),
+                    change_optimizer (0.30), adjust_attention_dropout (0.30),
+                    adjust_adam_beta1 (0.15), adjust_adam_beta2 (0.15)
+  healthy:          decrease_teacher_forcing (0.70, LM),
+                    decrease_lr (0.60), increase_lr (0.50),
+                    increase_dropout (0.50), increase_teacher_forcing (0.50, LM),
+                    add_width (0.45), increase_focal_gamma (0.35),
+                    decrease_focal_gamma (0.30), try_cross_entropy (0.20)
+  overfit:          increase_dropout (0.85), increase_weight_decay (0.80),
+                    increase_augmentation (0.70), disable_bidirectional (0.60, LM),
+                    enable_mixup (0.60), enable_cutout (0.55),
+                    increase_stochastic_depth (0.55), label_smoothing (0.55),
+                    enable_cutmix (0.50), embedding_dropout (0.50),
+                    text_augmentation (0.45), reduce_width (0.40),
+                    reduce_depth (0.35), decrease_sequence_length (0.35, LM),
+                    increase_text_augmentation (0.40),
+                    change_text_augmentation (0.45),
+                    toggle_bidirectional (0.30), try_focal_loss (0.25),
+                    increase_teacher_forcing (0.25, LM)
+  fast:             decrease_lr (0.90), add_lr_scheduler (0.80),
+                    increase_warmup (0.70), increase_dropout (0.60)
+  converged:        add_width (0.50), decrease_weight_decay (0.45),
+                    change_activation (0.30)
+  diverged:         decrease_lr (0.95), add_gradient_clipping (0.85)
+                    -- emitted in analyze() top-level, not in _add_*
+
+LM-specific actions tend to be high-priority where they apply: sequence_length
+is highest-impact when failed_to_learn or slow; teacher_forcing dominates
+when healthy.
 """
 
 from dataclasses import dataclass, field
@@ -66,7 +108,7 @@ ACTION_TYPES = {
     "unfreeze_embeddings", "change_fusion_method",
     "increase_sequence_length", "decrease_sequence_length",
     "increase_teacher_forcing", "decrease_teacher_forcing",
-    "disable_bidirectional", "increase_gradient_accumulation",
+    "disable_bidirectional",
 }
 
 
@@ -426,6 +468,40 @@ def _add_failed_to_learn(diag: Diagnosis, cm):
     # Context-aware layer-shape suggestions
     _propose_layer_shapes(diag, cm, verdict="failed_to_learn",
                            current_shape=_current_value_safe(cm, "layer_shape"))
+    # Language modeling: sequence_length is the most impactful LM hyperparameter
+    # when the model fails to learn (too short = no context to predict from).
+    if _is_tunable(cm, "sequence_length"):
+        diag.actions.append(Action(
+            type="increase_sequence_length",
+            reason="LM-critical: longer sequences give the model more context "
+                   "to learn from. Highest-priority action for failed LM training.",
+            target_param="sequence_length", priority=0.80,
+        ))
+    # Language modeling: unfreezing embeddings as capacity unlock for failed_to_learn
+    if _is_tunable(cm, "freeze_embeddings"):
+        diag.actions.append(Action(
+            type="unfreeze_embeddings",
+            reason="LM-strong: pretrained embeddings may be misaligned with "
+                   "the domain; unfreezing lets them adapt and may unblock learning.",
+            target_param="freeze_embeddings",
+            suggested_value=False, priority=0.65,
+        ))
+    # Stability improvements when learning fails
+    if _is_tunable(cm, "batch_norm"):
+        diag.actions.append(Action(
+            type="enable_batch_norm",
+            reason="Batch normalization stabilizes gradients - helpful when "
+                   "training fails to start.",
+            target_param="batch_norm",
+            suggested_value=True, priority=0.55,
+        ))
+    if _is_tunable(cm, "normalization"):
+        diag.actions.append(Action(
+            type="change_normalization",
+            reason="Try a different input normalization strategy (e.g. minmax "
+                   "vs standardize) - can dramatically affect early training.",
+            target_param="normalization", priority=0.50,
+        ))
 
 
 def _add_overfit(diag: Diagnosis, cm):
@@ -465,6 +541,19 @@ def _add_overfit(diag: Diagnosis, cm):
         diag.actions.append(Action(
             type="reduce_width",
             reason="Smaller model generalizes better.", priority=0.4,
+        ))
+    if _is_tunable(cm, "num_layers") or _is_tunable(cm, "num_hidden_layers"):
+        diag.actions.append(Action(
+            type="reduce_depth",
+            reason="Fewer layers reduce model capacity and overfitting.",
+            target_param="num_layers", priority=0.35,
+        ))
+    if _is_tunable(cm, "bidirectional"):
+        diag.actions.append(Action(
+            type="toggle_bidirectional",
+            reason="Flip bidirectional flag to test whether bi-context "
+                   "is helping or hurting generalization.",
+            target_param="bidirectional", priority=0.30,
         ))
     # Language modeling overfit actions
     if _is_tunable(cm, "sequence_length"):
@@ -559,6 +648,35 @@ def _add_slow(diag: Diagnosis, cm):
             reason="Smaller batch = more gradient updates.",
             target_param="batch_size", priority=0.6,
         ))
+        diag.actions.append(Action(
+            type="increase_batch_size",
+            reason="Larger batch can stabilize gradients on tricky losses.",
+            target_param="batch_size", priority=0.40,
+        ))
+    if _is_tunable(cm, "dropout"):
+        diag.actions.append(Action(
+            type="decrease_dropout",
+            reason="Excessive dropout can slow learning; try less regularization.",
+            target_param="dropout", priority=0.45,
+        ))
+    if _is_tunable(cm, "attention_dropout"):
+        diag.actions.append(Action(
+            type="adjust_attention_dropout",
+            reason="Tune attention-specific dropout (Transformer).",
+            target_param="attention_dropout", priority=0.30,
+        ))
+    if _is_tunable(cm, "adam_beta1"):
+        diag.actions.append(Action(
+            type="adjust_adam_beta1",
+            reason="Tune momentum decay (advanced Adam tuning).",
+            target_param="adam_beta1", priority=0.15,
+        ))
+    if _is_tunable(cm, "adam_beta2"):
+        diag.actions.append(Action(
+            type="adjust_adam_beta2",
+            reason="Tune squared-gradient decay (advanced Adam tuning).",
+            target_param="adam_beta2", priority=0.15,
+        ))
     if _is_tunable(cm, "hidden_size") or _is_tunable(cm, "num_hidden_layers"):
         diag.actions.append(Action(
             type="add_width",
@@ -585,14 +703,17 @@ def _add_slow(diag: Diagnosis, cm):
             reason="Larger effective batch may stabilize gradients.",
             target_param="gradient_accumulation_steps", priority=0.35,
         ))
-    # Language modeling: unfreezing Word2Vec embeddings adds capacity
+    # Language modeling: unfreezing Word2Vec embeddings adds capacity.
+    # Raised to high-priority because the empirical analysis showed this is
+    # one of the most underexplored levers in LM tuning.
     if _is_tunable(cm, "freeze_embeddings"):
         diag.actions.append(Action(
             type="unfreeze_embeddings",
-            reason="Unfreezing pretrained embeddings adds learnable capacity "
-                   "when the model is stuck (LM-specific).",
+            reason="LM-strong: unfreezing pretrained Word2Vec embeddings adds "
+                   "learnable capacity. Especially impactful after several "
+                   "trials without significant improvement.",
             target_param="freeze_embeddings",
-            suggested_value=False, priority=0.45,
+            suggested_value=False, priority=0.65,
         ))
     # Language modeling: alternative fusion strategy when stuck
     if _is_tunable(cm, "fusion_method"):
@@ -606,24 +727,18 @@ def _add_slow(diag: Diagnosis, cm):
     if _is_tunable(cm, "sequence_length"):
         diag.actions.append(Action(
             type="increase_sequence_length",
-            reason="Longer sequences expose more context; may help LM training.",
-            target_param="sequence_length", priority=0.40,
+            reason="LM-critical: longer sequences give the model more context. "
+                   "Most impactful LM hyperparameter when learning is slow.",
+            target_param="sequence_length", priority=0.78,
         ))
     # Language modeling: schedule-sampling-like teacher forcing
     if _is_tunable(cm, "teacher_forcing_ratio"):
         diag.actions.append(Action(
             type="decrease_teacher_forcing",
-            reason="Lower teacher forcing exposes the model to its own outputs "
-                   "during training, improving generation robustness.",
-            target_param="teacher_forcing_ratio", priority=0.35,
-        ))
-    # Language modeling: gradient accumulation for long sequences + small batch
-    if _is_tunable(cm, "gradient_accumulation_steps"):
-        diag.actions.append(Action(
-            type="increase_gradient_accumulation",
-            reason="Effective larger batch via accumulation; useful for LM with "
-                   "long sequences and small device batches.",
-            target_param="gradient_accumulation_steps", priority=0.30,
+            reason="LM-important: lower teacher forcing exposes the model to "
+                   "its own outputs during training, improving generation "
+                   "quality and reducing exposure bias.",
+            target_param="teacher_forcing_ratio", priority=0.70,
         ))
     # Context-aware layer-shape suggestions
     _propose_layer_shapes(diag, cm, verdict="slow",
@@ -703,6 +818,21 @@ def _add_healthy(diag: Diagnosis, cm):
         diag.actions.append(Action(
             type="add_width",
             reason="Explore more capacity.", priority=0.45,
+        ))
+    # Language modeling: teacher_forcing is a strong lever for a healthy
+    # model that isn't quite converging - it changes the train/inference
+    # match without harming a healthy training curve.
+    if _is_tunable(cm, "teacher_forcing_ratio"):
+        diag.actions.append(Action(
+            type="decrease_teacher_forcing",
+            reason="LM-key: healthy training but the model may suffer from "
+                   "exposure bias. Lower teacher forcing improves generation.",
+            target_param="teacher_forcing_ratio", priority=0.70,
+        ))
+        diag.actions.append(Action(
+            type="increase_teacher_forcing",
+            reason="Test whether higher teacher forcing helps convergence.",
+            target_param="teacher_forcing_ratio", priority=0.50,
         ))
     # If focal loss is currently in use, FTTS can tune gamma
     if _is_tunable(cm, "focal_gamma"):

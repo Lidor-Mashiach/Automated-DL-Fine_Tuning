@@ -52,6 +52,7 @@ class RunConfig:
     # Generation mode fields
     mode: str = "tune"                         # "tune" | "generate"
     checkpoint_path: Optional[str] = None      # for generate mode
+    warm_start_checkpoint: Optional[str] = None  # for tune mode: load weights before T0001
     initial_words: Optional[list] = None       # for generate mode (3 first words)
     sampling_strategy: str = "proportional"    # see core/sampling.py
     sampling_temperature: float = 1.0          # for temperature strategy
