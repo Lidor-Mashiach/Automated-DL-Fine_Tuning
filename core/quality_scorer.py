@@ -21,6 +21,7 @@ a named profile (performance / balanced / robust) or define custom weights.
 from dataclasses import dataclass
 from typing import Sequence
 
+import math
 import numpy as np
 
 from core.smoothing import moving_average, tail_average
@@ -99,10 +100,25 @@ def _compute_best_metric_component(val_metric: Sequence[float],
     For classification, val_metric is already in [0, 1] (accuracy), so no
     normalization needed. For regression, val_metric is -RMSE (higher=better),
     and we map to [0, 1] via a soft squash.
+
+    NaN/Inf handling: if the trial diverged (curve contains NaN or Inf),
+    we still consider the pre-divergence portion of the curve but cap the
+    final score at 0 to mark it as unusable. This prevents a trial that
+    briefly looked good before exploding from being chosen as 'best'.
     """
     if not val_metric:
         return 0.0, 0.0
-    smoothed = moving_average(val_metric, window)
+
+    # Detect divergence: any non-finite value in the curve disqualifies the trial.
+    has_diverged = any(not math.isfinite(v) for v in val_metric)
+
+    # Compute the smoothed best from the FINITE portion of the curve
+    finite_curve = [v for v in val_metric if math.isfinite(v)]
+    if not finite_curve:
+        # Entire curve is NaN/Inf - completely failed
+        return 0.0, float("-inf")
+
+    smoothed = moving_average(finite_curve, window)
     best = max(smoothed)
 
     if task_type == "classification":
@@ -269,6 +285,15 @@ def compute_quality_score(
         weights["convergence_speed"]  * speed_c +
         weights["generalization_gap"] * gap_c
     )
+
+    # Divergence penalty: if the val_metric curve contains NaN or Inf, the
+    # trial likely exploded mid-training. Even if the pre-divergence portion
+    # looked OK, the HP combination is unreliable for refit. We zero out the
+    # quality so this trial cannot be picked as 'best'. The Analyzer's
+    # `diverged` verdict already excludes it from FTTS exploitation; this
+    # ensures the orchestrator's best-tracking also excludes it.
+    if val_metric and any(not math.isfinite(v) for v in val_metric):
+        total = 0.0
 
     return QualityBreakdown(
         total=total,

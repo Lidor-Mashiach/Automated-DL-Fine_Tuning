@@ -170,11 +170,97 @@ The current shape is skipped (would be a no-op). Implemented in `core/analyzer.p
 
 ## 🔄 DAG Deduplication
 
-FTTS tracks every hyperparameter configuration it has explored or queued, using a deterministic JSON signature. When a proposed action would produce a duplicate configuration (e.g., `try_layer_shape_uniform` from a node that already has `uniform` after some other path), FTTS silently skips it and moves to the next action.
+FTTS builds a **DAG** (directed acyclic graph) of trials, not a tree: the same hyperparameter configuration can be reached from multiple parents via different action sequences. To avoid wasting trial budget re-evaluating an identical configuration, FTTS deduplicates.
 
-This:
-- Saves trial budget for genuinely new configurations.
-- Prevents wasted compute on revisited nodes.
-- Is logged when it happens: `[ftts] dedup: skipping action 'X' from TN - target HP already explored.`
+### How the signature works
 
-Implemented in `search_strategies/ftts.py::_hp_signature` and used by `propose_next`.
+`_hp_signature(hp)` produces a deterministic JSON string from the **entire** hyperparameter dict (all keys except `__`-prefixed metadata), with sorted keys. Two configurations have the same signature **if and only if every hyperparameter value matches**.
+
+```
+seq_len=256, lr=1e-3, hidden=256  ->  signature A
+seq_len=512, lr=1e-3, hidden=256  ->  signature B   (different - seq differs)
+seq_len=512, lr=3e-3, hidden=256  ->  signature C   (different - lr differs)
+```
+
+The signature is computed **after** `_apply_action` mutates `child_hp`, so it always reflects the post-action values. A child of `increase_sequence_length` from a `seq_len=256` parent gets `seq_len=512` in its dict before the signature is taken.
+
+### When dedup fires (and why it's correct)
+
+Dedup fires when two **different action paths converge to the identical full HP dict**. Example from a real run:
+
+```
+T0013: seq=512, lr=3.60e-3   (path: root -> increase_seq -> increase_lr -> increase_seq)
+T0019: seq=512, lr=4.32e-3   (T0013 + increase_lr)
+T0016: seq=256, lr=4.32e-3   (a different path)
+T0024 attempt: T0016 + increase_sequence_length -> seq=512, lr=4.32e-3
+               ^^^ identical to T0019 -> DEDUP FIRES, correctly.
+```
+
+Both paths legitimately arrived at `{seq=512, lr=4.32e-3, ...}`. Evaluating it twice would waste a trial. This is **correct DAG behavior, not a bug** — the action `increase_sequence_length` did its job (256→512), it just happened to land on an already-visited node.
+
+### Why `increase_sequence_length` can *look* blocked
+
+In a run where most trials get the `failed_to_learn` verdict, the analyzer keeps proposing both `increase_lr` (0.85) and `increase_sequence_length` (0.80). FTTS explores the seq_len axis fully: `128 → 256 → 512`. Once `seq_len=512` has been visited in combination with every reachable `lr` value, **any further `increase_sequence_length` necessarily lands on an already-seen node** and gets deduped. The log then shows repeated dedup messages for `increase_sequence_length`, which can look like it's "blocked" — but actually the entire reachable seq_len space was already covered. The remaining choices `{32, 64}` are *below* the initial value of 128 and are only reachable via `decrease_sequence_length`, which the `failed_to_learn` verdict doesn't emit (correctly — a model that won't learn shouldn't shrink its context).
+
+### Diagnostic logging
+
+Two log lines help diagnose dedup behavior:
+
+```
+[ftts] dedup: skipping 'increase_sequence_length' from T0016
+       (target=sequence_length: 256 -> 512) - HP combination already
+       explored via another path.
+```
+Shows the action, parent, and exactly which value the target param moved to. If you see `256 -> 512` repeatedly, FTTS *is* trying larger seq_len — the combination is just already covered.
+
+```
+[ftts] action 'increase_sequence_length' from T0008 produced no change
+       (target may be at YAML boundary). Trying next.
+```
+Shows the action hit the end of the YAML `choices` list (e.g. `seq_len` already at its max of 512). `_adjust_choice_param` returns `None` in this case and FTTS moves on.
+
+### Value-coverage tracking
+
+`_value_coverage` is a `dict[param_name -> set of values]` that records which concrete values of each tunable have been visited anywhere in the DAG. It's a **diagnostic aid** (not used to block anything) — it lets you answer "did FTTS ever try `seq_len=512`?" by inspecting `strat._value_coverage['sequence_length']`.
+
+### Implementation
+
+- `_hp_signature(hp)` — full-dict JSON signature
+- `_value_coverage_key(hp, target_param)` — `(param, value)` tuple for coverage tracking
+- `_seen_signatures: set[str]` — every visited/queued signature
+- `_value_coverage: dict[str, set]` — per-param visited values
+- All wired in `propose_next`
+
+The dedup is intentionally **full-HP-based**, not per-parameter. A per-parameter dedup ("never try seq_len=512 twice") would be wrong: `seq_len=512` paired with `lr=1e-3` and `seq_len=512` paired with `lr=5e-3` are genuinely different experiments worth running.
+
+---
+
+## 🎲 Exploration Diversity Boost (FTTS)
+
+After empirical observation that FTTS would greedily pick the same single action (e.g. `increase_lr` with priority=0.80) trial after trial — starving lower-priority but still important LM-specific actions like `increase_sequence_length` (0.78) — the tree now applies a **diversity dampening factor** when scoring queue entries.
+
+### The math
+For each action queued in `register_completed`:
+```
+diversity_factor = 0.85 ^ n_already_consumed_of_this_type
+effective_score = quality_score * action.priority * diversity_factor
+```
+
+After consuming the same action type N times across the tree:
+- N=0: factor=1.00 (full priority)
+- N=1: factor=0.85
+- N=2: factor=0.72
+- N=3: factor=0.61
+- N=5: factor=0.44
+
+This means a high-priority action stays competitive but eventually loses to alternatives that haven't been tried yet. Empirically, this balances exploit vs explore well.
+
+### Why not just lower priorities in the analyzer?
+The analyzer doesn't know how many trials of each action type have already been run. The tree does. Pushing this logic into the tree keeps the analyzer stateless (good) and gives the heap a global view of what's been tried.
+
+### What's NOT changed
+- The DAG dedup (skipping HP signatures already explored) is unchanged — it's correct and necessary.
+- Per-parent action consumption tracking is unchanged — each parent emits each of its actions at most once.
+- Action priorities in `analyzer.py` are unchanged.
+
+The diversity boost only affects which action is picked next when multiple parents have similar candidates. It doesn't change WHAT'S available to pick.

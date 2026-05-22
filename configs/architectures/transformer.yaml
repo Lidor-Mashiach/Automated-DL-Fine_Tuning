@@ -14,7 +14,7 @@ parameters:
   d_model:
     enabled: true
     initial_value: 128
-    choices: [64, 128, 256, 512]
+    choices: [64, 128, 256, 512, 1024]
 
   # nhead
   # -----

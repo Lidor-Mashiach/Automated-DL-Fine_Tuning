@@ -91,6 +91,12 @@ class FTTS:
         # so different action paths don't re-evaluate the same configuration.
         self._seen_signatures: set[str] = set()
 
+        # Value-coverage tracking (for diagnostics): for each tunable param,
+        # which concrete values have already been visited across the tree.
+        # Helps explain 'why didn't FTTS try param=X' - it might be because X
+        # was already reached (in combination with other HPs) via another path.
+        self._value_coverage: dict[str, set] = {}
+
     # ---------------------------------------------- public API
 
     def _hp_signature(self, hp: dict) -> str:
@@ -103,6 +109,20 @@ class FTTS:
         # (skip metadata-like keys with __ prefix if any)
         relevant = {k: v for k, v in hp.items() if not k.startswith("__")}
         return json.dumps(relevant, sort_keys=True, default=str)
+
+    def _value_coverage_key(self, hp: dict, target_param: str | None) -> tuple | None:
+        """
+        Coverage key for value-aware diversity tracking.
+
+        Different from _hp_signature: this looks at just `(target_param, value)`
+        so we can tell whether a particular value of a tunable has already
+        been explored (regardless of other HPs).
+
+        Returns None if no target_param (action doesn't tune a specific value).
+        """
+        if not target_param or target_param not in hp:
+            return None
+        return (target_param, hp[target_param])
 
     def initial_hyperparameters(self) -> dict:
         """Build the root hyperparameters from initial_value fields of the YAML."""
@@ -147,16 +167,33 @@ class FTTS:
         changes_made = self._apply_action(child_hp, action)
 
         if not changes_made:
-            # Action could not be applied (e.g., param disabled). Try next one.
+            # Action could not be applied (e.g., param disabled, or already at
+            # YAML range boundary). Skip and try next.
+            print(f"[ftts] action '{action.type}' from {parent_id} produced "
+                  f"no change (target may be at YAML boundary). Trying next.")
             return self.propose_next()
 
-        # DAG-dedup: skip if this exact HP combination has been seen before
+        # DAG-dedup: skip if this exact HP combination has been seen before.
+        # This is correct DAG behavior - two paths converged to the same state.
+        # We print extra detail to help diagnose 'why was X blocked'.
         signature = self._hp_signature(child_hp)
         if signature in self._seen_signatures:
-            print(f"[ftts] dedup: skipping action '{action.type}' from "
-                  f"{parent_id} - target HP already explored.")
+            tgt = action.target_param
+            tgt_old = parent.hyperparameters.get(tgt) if tgt else None
+            tgt_new = child_hp.get(tgt) if tgt else None
+            print(f"[ftts] dedup: skipping '{action.type}' from {parent_id} "
+                  f"(target={tgt}: {tgt_old} -> {tgt_new}) - HP combination "
+                  f"already explored via another path.")
             return self.propose_next()
         self._seen_signatures.add(signature)
+
+        # Track value-coverage for diagnostics: which values of each tunable
+        # have already been visited. Useful for understanding 'why didn't FTTS
+        # try seq_len=X?' - it might've been because X was already explored
+        # in combination with all other reachable HP variants.
+        vk = self._value_coverage_key(child_hp, action.target_param)
+        if vk is not None:
+            self._value_coverage.setdefault(vk[0], set()).add(vk[1])
 
         rationale = (
             f"Based on {parent_id} (verdict={parent.verdict}, quality="

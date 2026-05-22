@@ -15,7 +15,7 @@ parameters:
   hidden_size:
     enabled: true
     initial_value: 128
-    choices: [32, 64, 128, 256]
+    choices: [32, 64, 128, 256, 512, 1024]
 
   # num_layers
   # ----------

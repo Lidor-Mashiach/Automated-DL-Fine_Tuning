@@ -330,3 +330,80 @@ After the empirical-analysis pass, every ACTION_TYPE is emitted by at least one 
 - (emitted in `analyze()` top-level, not in `_add_*`)
 
 Each action is gated by `_is_tunable(cm, param)` — if the parameter is disabled in the architecture's YAML, the action is silently skipped.
+
+---
+
+## 🎵 Generator MIDI Safety Net
+
+A bug was found where generation could crash with:
+```
+input.size(-1) must be equal to input_size. Expected 308, got 300
+```
+
+This happened when the LSTM was built with `midi_dim > 0` (e.g. 8 for the `simple` or `per_word` variants), but at generation time the song didn't have MIDI features attached (e.g. because the .mid file was missing, or `midi_dir` was None). The model expected a 308-dim LSTM input (300 word_emb + 8 MIDI), but only got 300.
+
+### The fix
+Two defensive layers:
+
+1. **`generator.get_midi_for_step`** — when `midi_dim > 0` but `midi_features is None`, returns a zero tensor of the correct shape instead of `None`. This ensures the model always receives the input shape it was built for.
+
+2. **`models/lstm.py::_LSTMLanguageModel.step`** — defensive check: if the model has `midi_dim > 0` but `midi_feat` arrives as `None`, fills in zeros automatically. This is a safety net for any other caller path.
+
+### Behavior
+- When the model was trained with MIDI conditioning but generation has no MIDI features available, the model behaves as if the melody were silent (all-zero features). It can still generate coherent text — just without melody influence.
+- When MIDI features ARE available, behavior is unchanged.
+
+The melody-influence probe still works correctly because it explicitly passes real MIDI vs. shuffled MIDI; both are non-None, so neither hits the zero-fill path.
+
+---
+
+## 🛡️ NaN/Divergence Defense (post-empirical fix)
+
+After observing failed runs where a single diverged trial poisoned the entire final phase, the code now has three layers of defense against NaN values propagating through the system.
+
+### Layer 1: Quality score zeroed for diverged trials
+In `quality_scorer.compute_quality_score`, if the `val_metric` curve contains any `NaN` or `Inf`, the total quality is set to 0. Otherwise a trial that briefly looked good before exploding (e.g. captured loss 2.5 right before going NaN) could win the smoothed-best comparison and become the "best" trial despite producing unusable weights.
+
+### Layer 2: Orchestrator filters by status + verdict
+In `orchestrator._execute_and_record`, a trial is eligible to become `best` only if:
+- `result.status in ("completed", "early_stopped")` — actually trained to completion
+- `diagnosis.verdict not in ("diverged", "failed")` — didn't blow up
+
+Even if Layer 1 somehow gave a non-zero score, this layer rejects diverged/failed trials at the orchestrator level.
+
+### Layer 3: Final-phase abort on NaN
+In `final_trainer._refit_and_eval`, if the training loss becomes NaN during refit, the function returns `(NaN, NaN)` immediately and prints a clear warning. The downstream code then:
+- Writes `test_evaluation.txt` with NaN values (transparency: the user sees what happened)
+- Skips lyrics generation entirely (`final_trainer.run_final_phase`), preventing the CUDA assertion crash that happens when sampling from a model with NaN logits.
+
+This protects against the failure mode where the diverged trial passed Layers 1+2 (e.g. due to a corner case in the curve) but its hyperparameters still produce NaN on the larger combined Train+Val set.
+
+### What the user sees on a divergent run
+Instead of a CUDA assertion crash, the user gets:
+```
+[final] [WARN] refit diverged at epoch 20 (loss=nan). Aborting refit. ...
+[final] [WARN] Skipping lyrics generation: refit diverged (test_loss=nan).
+```
+The model checkpoint is still saved (for debugging), but lyrics generation is skipped.
+
+---
+
+## 🛡️ Additional Defense Layers (post-empirical fix v2)
+
+After another round of empirical analysis, two more bugs were found and fixed:
+
+### Bug: `lr_warmup` was a dead hyperparameter
+The `lr_warmup` parameter was defined in YAML (transformer.yaml), proposed by the analyzer (`increase_warmup` action), and adjusted by FTTS — but `_build_scheduler` never consumed it. Setting `lr_warmup=500` had zero effect on training.
+
+**Fix**: `_build_scheduler` now uses `LambdaLR + SequentialLR` to chain a linear warmup phase (0→base_lr over N epochs) with the main scheduler (cosine/step/etc). `reduce_on_plateau` is incompatible with `SequentialLR` and skips warmup.
+
+### Bug: `normalization` was a dead hyperparameter
+The `normalization` parameter was tuned by FTTS, but the data loader only reads it from a `cfg._normalization_method` attribute that's never set. Result: changes to `hp["normalization"]` were silently ignored.
+
+**Fix**: Marked `enabled: false` in `mlp.yaml`. The action `change_normalization` is still in ACTION_TYPES (because someone could enable the param manually after fixing the loader), but won't be emitted unless the YAML opts in.
+
+### Bug: LSTM forward crashes on (B,T) input when midi_dim>0
+Same root cause as the generator bug: if `midi_feats=None` is passed to `forward()` (e.g. dataset returns 2-tuple instead of 3-tuple), the LSTM gets a 300-dim input instead of the expected 308. Now defensively fills with zeros — consistent with the `step()` fix from the previous session.
+
+### Bug: Generated standalone `model.py` had the same MIDI crash
+The `lm_codegen.py` template inherited the original (buggy) `step()` and `midi_for_step()` patterns. Users running the deliverable `model.py` on their own machine would hit the same "Expected 308, got 300" crash. Fixed by mirroring the main-codebase defensive fills.

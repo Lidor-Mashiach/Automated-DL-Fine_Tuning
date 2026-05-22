@@ -319,9 +319,19 @@ class Orchestrator:
                 applied_action=action_applied,
             )
 
-        # Track best
+        # Track best.
+        # CRITICAL: a `diverged` trial must NOT be eligible to become best.
+        # Its smoothed metric might look great (because it captured a brief
+        # dip before exploding to NaN), but the resulting HP combination
+        # produces NaN-trained models on refit, breaking the entire final
+        # phase. Same for `failed` - it never trained.
         quality = breakdown.total if breakdown else float("-inf")
-        improved = quality > self.best_quality
+        verdict = diagnosis.verdict if diagnosis else "unknown"
+        eligible_for_best = (
+            result.status in ("completed", "early_stopped")
+            and verdict not in ("diverged", "failed")
+        )
+        improved = eligible_for_best and quality > self.best_quality
         if improved:
             self.best_quality = quality
             self.best_trial_id = trial_id

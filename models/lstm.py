@@ -158,11 +158,23 @@ class _LSTMLanguageModel(nn.Module):
         word_ids: (B, T) Long
         midi_feats: (B, T, midi_dim) Float or None
         Returns: logits (B, T, vocab_size), hidden_state
+
+        If the model was built with midi_dim > 0 but `midi_feats` is None
+        (e.g. dataset returns a 2-tuple instead of 3-tuple), we fill zeros
+        so the LSTM input shape always matches its declared input_size.
+        Otherwise we'd crash with 'Expected X, got Y' at runtime.
         """
         emb = self.embedding(word_ids)
         emb = self.embedding_dropout(emb)
 
-        if self.midi_dim == 0 or midi_feats is None or midi_feats.size(-1) == 0:
+        # Defensive zero-fill: midi_dim>0 but no midi provided
+        if self.midi_dim > 0 and (midi_feats is None or midi_feats.size(-1) == 0):
+            midi_feats = torch.zeros(
+                (emb.size(0), emb.size(1), self.midi_dim),
+                dtype=torch.float32, device=emb.device,
+            )
+
+        if self.midi_dim == 0:
             lstm_in = emb
         elif self.fusion_method == "concatenate":
             lstm_in = torch.cat([emb, midi_feats], dim=-1)
@@ -183,17 +195,28 @@ class _LSTMLanguageModel(nn.Module):
         midi_feat: (B, midi_dim) Float or None
         hidden: previous LSTM state
         Returns: logits (B, vocab_size), new_hidden
+
+        If the model was built with midi_dim > 0 but `midi_feat` is None,
+        we fill in zeros - otherwise the LSTM input shape wouldn't match
+        its declared input_size and would crash.
         """
         word_ids = word_id.unsqueeze(1)  # (B, 1)
-        if midi_feat is not None and self.midi_dim > 0:
-            midi_feats = midi_feat.unsqueeze(1)  # (B, 1, midi_dim)
+        if self.midi_dim > 0:
+            if midi_feat is None:
+                # Safety: feed zeros so shape matches the LSTM's input_size
+                midi_feats = torch.zeros(
+                    (word_ids.size(0), 1, self.midi_dim),
+                    dtype=torch.float32, device=word_ids.device,
+                )
+            else:
+                midi_feats = midi_feat.unsqueeze(1)  # (B, 1, midi_dim)
         else:
             midi_feats = None
 
         emb = self.embedding(word_ids)
         emb = self.embedding_dropout(emb)
 
-        if self.midi_dim == 0 or midi_feats is None:
+        if self.midi_dim == 0:
             lstm_in = emb
         elif self.fusion_method == "concatenate":
             lstm_in = torch.cat([emb, midi_feats], dim=-1)

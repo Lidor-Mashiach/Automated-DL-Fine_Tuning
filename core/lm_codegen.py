@@ -496,7 +496,14 @@ class LSTMLanguageModel(nn.Module):
 
     def forward(self, word_ids, midi_feats=None):
         emb = self.embedding_dropout(self.embedding(word_ids))
-        if self.midi_dim == 0 or midi_feats is None or midi_feats.size(-1) == 0:
+        # If model has midi_dim > 0 but no midi was provided, fill zeros so the
+        # LSTM input shape always matches its declared input_size.
+        if self.midi_dim > 0 and (midi_feats is None or midi_feats.size(-1) == 0):
+            midi_feats = torch.zeros(
+                (emb.size(0), emb.size(1), self.midi_dim),
+                dtype=torch.float32, device=emb.device,
+            )
+        if self.midi_dim == 0:
             lstm_in = emb
         elif self.fusion_method == "concatenate":
             lstm_in = torch.cat([emb, midi_feats], dim=-1)
@@ -508,9 +515,20 @@ class LSTMLanguageModel(nn.Module):
 
     def step(self, word_id, midi_feat, hidden=None):
         word_ids = word_id.unsqueeze(1)
-        midi_feats = midi_feat.unsqueeze(1) if midi_feat is not None and self.midi_dim > 0 else None
+        # CRITICAL: if midi_dim > 0 but midi_feat is None, we must fill in
+        # zeros - otherwise the LSTM input shape mismatches.
+        if self.midi_dim > 0:
+            if midi_feat is None:
+                midi_feats = torch.zeros(
+                    (word_ids.size(0), 1, self.midi_dim),
+                    dtype=torch.float32, device=word_ids.device,
+                )
+            else:
+                midi_feats = midi_feat.unsqueeze(1)
+        else:
+            midi_feats = None
         emb = self.embedding_dropout(self.embedding(word_ids))
-        if self.midi_dim == 0 or midi_feats is None:
+        if self.midi_dim == 0:
             lstm_in = emb
         elif self.fusion_method == "concatenate":
             lstm_in = torch.cat([emb, midi_feats], dim=-1)
@@ -648,7 +666,13 @@ def generate(model, vocab, initial_word, midi_features, max_words):
     midi_dim = get_midi_feature_dim(MIDI_VARIANT)
 
     def midi_for_step(step):
-        if midi_dim == 0 or midi_features is None: return None
+        # CRITICAL: when midi_dim > 0, we MUST return a tensor of the right
+        # shape - the LSTM was built expecting (batch, 1, embedding_dim+midi_dim)
+        # input. Returning None causes "Expected X, got Y" crash at runtime.
+        if midi_dim == 0:
+            return None
+        if midi_features is None:
+            return torch.zeros((1, midi_dim), dtype=torch.float32, device=DEVICE)
         if midi_features.ndim == 1:
             return torch.from_numpy(midi_features).float().unsqueeze(0).to(DEVICE)
         s = min(step, midi_features.shape[0] - 1)

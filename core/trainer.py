@@ -149,16 +149,51 @@ def _build_optimizer(model, hp):
 
 
 def _build_scheduler(optimizer, hp, epochs):
+    """
+    Build the LR scheduler from hp.
+
+    If `lr_warmup` is set (>0), the scheduler is wrapped so that the first
+    `lr_warmup` epochs use a linear warmup from 0 -> base_lr, and the main
+    scheduler kicks in afterwards.
+    """
     name = hp.get("lr_scheduler", "none")
-    if name in (None, "none"):
-        return None
+    warmup_epochs = int(hp.get("lr_warmup", 0))
+
+    # Build the main scheduler
+    main = None
     if name == "cosine":
-        return CosineAnnealingLR(optimizer, T_max=max(1, epochs))
-    if name == "step":
-        return StepLR(optimizer, step_size=max(1, epochs // 3), gamma=0.5)
+        # Account for warmup epochs in T_max so cosine completes by end-of-training
+        main = CosineAnnealingLR(optimizer, T_max=max(1, epochs - warmup_epochs))
+    elif name == "step":
+        main = StepLR(optimizer, step_size=max(1, epochs // 3), gamma=0.5)
+    elif name == "reduce_on_plateau":
+        main = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
+
+    if warmup_epochs <= 0:
+        return main
+
+    # Wrap in a LambdaLR-style warmup that switches to main after N epochs.
+    # We use SequentialLR to chain: warmup -> main.
+    from torch.optim.lr_scheduler import LambdaLR, SequentialLR
+    warmup = LambdaLR(
+        optimizer,
+        lr_lambda=lambda epoch: (epoch + 1) / max(1, warmup_epochs),
+    )
+    if main is None:
+        # Just warmup, then stay at base LR (use ConstantLR-like behavior via lambda)
+        return warmup
+    # ReduceLROnPlateau can't be combined via SequentialLR (it's epoch-based,
+    # but its step() takes a metric arg). For that case, skip warmup-wrapping.
     if name == "reduce_on_plateau":
-        return ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
-    return None
+        return main
+    try:
+        return SequentialLR(
+            optimizer, schedulers=[warmup, main],
+            milestones=[warmup_epochs],
+        )
+    except Exception:
+        # Older torch versions may not support SequentialLR cleanly - fall back
+        return main
 
 
 def _compute_metric(outputs, targets, task_type, loss_fn=None, pad_idx=0):

@@ -75,10 +75,19 @@ def generate_lyrics(
 
     generated = []
 
-    # Handle MIDI features layout
+    # Handle MIDI features layout.
+    # CRITICAL: if midi_dim > 0, the model REQUIRES a (B, midi_dim) tensor at
+    # every step - otherwise the LSTM input shape mismatches its expected
+    # input_size (e.g. expects 308 = 300 word_emb + 8 midi, gets 300 alone
+    # and crashes with "Expected 308, got 300"). When MIDI features aren't
+    # available (no .mid file, "simple" with no MIDI dir, etc.), feed zeros
+    # so the model can still run - it'll behave as if midi were silent.
     def get_midi_for_step(step: int):
-        if midi_dim == 0 or midi_features is None:
+        if midi_dim == 0:
             return None
+        if midi_features is None:
+            # Model expects midi but song has none - feed zeros so shapes match
+            return torch.zeros((1, midi_dim), dtype=torch.float32, device=device)
         feats = midi_features
         if feats.ndim == 1:
             # global (simple): same vector at every step

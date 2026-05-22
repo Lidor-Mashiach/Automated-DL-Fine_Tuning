@@ -14,6 +14,7 @@ and uses them as the result of the tuning session.
 """
 
 from pathlib import Path
+import math
 
 import torch
 import torch.nn as nn
@@ -85,13 +86,21 @@ def run_final_phase(
 
     # 7. For language_modeling: generate lyrics on the test set
     if cfg.task_type == "language_modeling":
-        try:
-            _run_generation_for_lm(
-                model=model, cfg=cfg, data_info=data_info,
-                final_dir=final_dir, device=device,
-            )
-        except Exception as exc:
-            print(f"[final] [WARN] Generation phase failed: {exc}")
+        # Skip generation if refit diverged - the model weights are NaN,
+        # which would produce NaN logits and trigger CUDA assertions during
+        # sampling. Saving the (broken) checkpoint is still useful for debug.
+        if not math.isfinite(test_loss):
+            print(f"[final] [WARN] Skipping lyrics generation: refit "
+                  f"diverged (test_loss={test_loss}). The model's weights "
+                  f"are not usable for generation.")
+        else:
+            try:
+                _run_generation_for_lm(
+                    model=model, cfg=cfg, data_info=data_info,
+                    final_dir=final_dir, device=device,
+                )
+            except Exception as exc:
+                print(f"[final] [WARN] Generation phase failed: {exc}")
 
 
 def _save_checkpoint(path, model, cfg, hp, data_info):
@@ -223,6 +232,21 @@ def _refit_and_eval(model, cfg, hp, data_info, cm, device):
         if (epoch + 1) % max(1, epochs // 5) == 0:
             print(f"[final]   refit epoch {epoch+1}/{epochs}: "
                   f"loss={tr_loss:.4f} metric={tr_metric:.4f}")
+        # Abort refit immediately if loss diverged - subsequent epochs would
+        # produce more NaNs and the final test eval + lyrics generation
+        # would fail with CUDA assertions on NaN logits. The user is better
+        # served by an early stop with a clear warning than by a downstream
+        # CUDA crash.
+        if not math.isfinite(tr_loss):
+            print(f"[final] [WARN] refit diverged at epoch {epoch+1} "
+                  f"(loss={tr_loss}). Aborting refit. The best trial's "
+                  f"hyperparameters do not produce a stable model on the "
+                  f"combined Train+Val set; test evaluation and generation "
+                  f"will be skipped.")
+            return float("nan"), float("nan"), {
+                "train_loss": train_loss_curve,
+                "train_metric": train_metric_curve,
+            }
 
     # Evaluate on Test_set
     if test_loader is None:

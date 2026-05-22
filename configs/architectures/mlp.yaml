@@ -41,7 +41,7 @@ parameters:
   hidden_size:
     enabled: true
     initial_value: 128
-    choices: [32, 64, 128, 256, 512]
+    choices: [32, 64, 128, 256, 512, 1024]
 
   # activation
   # ----------
@@ -264,8 +264,14 @@ training:
   #                 Sensitive to outliers.
   #   max_abs     : x / max(|x|) per column. Maps to [-1, 1]. Preserves zeros.
   #                 Good for sparse data.
+  # NOTE: normalization is a data-preprocessing decision applied once at
+  # load time (in data_loaders/local_loader.py), NOT a per-trial hyperparameter.
+  # Changing it per trial would require reloading + re-normalizing the entire
+  # dataset, which is expensive and circular. The Analyzer's `change_normalization`
+  # action exists but is gated by enabled=false here, so FTTS won't actually
+  # mutate it. To use a non-default method, set it in the data loader directly.
   normalization:
-    enabled: true
+    enabled: false
     initial_value: "standardize"
     choices: ["none", "standardize", "min_max", "max_abs"]
 

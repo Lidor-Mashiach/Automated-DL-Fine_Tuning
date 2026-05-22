@@ -177,10 +177,23 @@ class ExperimentTree:
                     parent.consumed_actions.append(applied_action)
 
             # Add this node's actions to the priority queue
-            # Only if the trial was successful enough to be a useful parent
+            # Only if the trial was successful enough to be a useful parent.
+            #
+            # Diversity boost: if an action_type has been consumed many times
+            # across the tree already, dampen its effective score so other
+            # actions get a chance. This prevents FTTS from greedily picking
+            # the same single action (e.g. increase_lr) in every step, which
+            # was observed empirically to starve LM-specific actions like
+            # increase_sequence_length.
+            consumed_count = self._action_consumption_count()
             if status in ("done",) and actions:
                 for action in actions:
-                    score = quality_score * action.priority
+                    n_consumed = consumed_count.get(action.type, 0)
+                    # Each prior consumption dampens this action's score by 0.85x.
+                    # After 5 uses, the score is 0.44x the original -- still
+                    # competitive if priority is high, but lets diversity win.
+                    diversity_factor = 0.85 ** n_consumed
+                    score = quality_score * action.priority * diversity_factor
                     self._counter += 1
                     entry = QueueEntry(
                         neg_score=-score,
@@ -189,6 +202,14 @@ class ExperimentTree:
                         action=action,
                     )
                     heapq.heappush(self._heap, entry)
+
+    def _action_consumption_count(self) -> dict[str, int]:
+        """How many times each action.type has been consumed across the tree."""
+        counts: dict[str, int] = {}
+        for node in self._nodes.values():
+            for a in node.consumed_actions:
+                counts[a.type] = counts.get(a.type, 0) + 1
+        return counts
 
     # -------------------------------------------------- popping next proposal
 

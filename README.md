@@ -334,7 +334,9 @@ Most cost is the model itself, not the framework. The FTTS tree only stores tria
 - MLP: 50-200 MB
 - CNN (medium): 1-2 GB
 - Transformer (medium): 1-3 GB
-- Transformer (12 layers, d_model=512): 8-16 GB
+- Transformer (12 layers, d_model=1024): 12-24 GB
+
+All architectures support structure sizes up to 1024 (e.g. `hidden_size=1024`, `d_model=1024`, `fc_size=1024`). Large models are explored only when FTTS finds them worthwhile.
 
 If you have 32+ GB of RAM, you can comfortably explore deep networks. With 128 GB, even very large transformers fit easily.
 

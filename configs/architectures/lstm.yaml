@@ -92,7 +92,7 @@ training:
   batch_size:
     enabled: true
     initial_value: 64
-    choices: [32, 64, 128]
+    choices: [32, 64, 128, 256]
 
   epochs:
     enabled: true
@@ -110,7 +110,7 @@ training:
   sequence_length:
     enabled: true
     initial_value: 128
-    choices: [32, 64, 128, 256, 512]
+    choices: [32, 64, 128, 256, 512, 1024]
 
   # loss_function - see configs/architectures/mlp.yaml for full docs
   loss_function:
@@ -225,7 +225,7 @@ training:
   fusion_proj_dim:
     enabled: true
     initial_value: 128
-    choices: [64, 128, 256]
+    choices: [64, 128, 256, 512]
 
   # freeze_embeddings
   # -----------------

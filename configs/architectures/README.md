@@ -21,7 +21,7 @@ See the [parent README](../README.md) for the parameter format specification.
 Dense fully-connected network. Best for tabular data.
 
 - **Depth:** 1-5 hidden layers
-- **Width:** 32-512 neurons per layer
+- **Width:** 32-1024 neurons per layer
 - **Layer shapes:** uniform / funnel / pyramid / hourglass
 
 ### [`cnn.yaml`](cnn.yaml) — Convolutional Neural Network
@@ -385,12 +385,12 @@ Rather than restricting the search to "good" values, the range was widened in bo
 | Parameter | Old initial | New initial | Old choices | New choices |
 |---|---|---|---|---|
 | `hidden_size` | 128 | **256** | `[64, 128, 256, 512]` | **`[32, 64, 128, 256, 512, 1024]`** |
-| `sequence_length` | 32 | **128** | `[32, 64, 128, 256]` | **`[32, 64, 128, 256, 512]`** |
+| `sequence_length` | 32 | **128** | `[32, 64, 128, 256]` | **`[32, 64, 128, 256, 512, 1024]`** |
 
 ### Why widen instead of narrow?
 - `hidden_size=32/64` is sometimes the right answer for tiny corpora or fast experimentation. Keep it available.
 - `hidden_size=1024` is useful for runs with abundant GPU memory and large vocabularies.
-- `sequence_length=512` lets the model learn long-range structure (multi-verse coherence) when memory allows.
+- `sequence_length=512/1024` lets the model learn long-range structure (multi-verse coherence) when memory allows.
 - The analyzer's `increase_X` / `decrease_X` actions navigate the choices list step by step, so a wider list just means more exploration room, not slower convergence.
 
 These changes affect only the **initial** trial (T0001) and the search space. FTTS can still reach any value within the choices list during exploration.
@@ -414,3 +414,26 @@ Empirical analysis revealed 9 ACTION_TYPES that had FTTS handlers but were **nev
 | `adjust_adam_beta2` | `slow` | 0.15 | Advanced Adam squared-gradient tuning (off-by-default) |
 
 Note: the `adjust_adam_beta1/2` actions are emitted only when those parameters are explicitly enabled in YAML (default is `enabled: false`).
+
+---
+
+## 📏 Large-Model Support (up to 1024-wide structures)
+
+All architectures now support structure sizes up to 1024, not just 512. This lets FTTS explore high-capacity models when the data and GPU memory justify it.
+
+| Architecture | Parameter | Old max | New max |
+|---|---|---|---|
+| MLP | `hidden_size` | 512 | **1024** |
+| RNN | `hidden_size` | 256 | **1024** |
+| LSTM | `hidden_size` | 1024 | 1024 (already) |
+| LSTM | `sequence_length` | 512 | **1024** |
+| LSTM | `fusion_proj_dim` | 256 | **512** |
+| CNN | `fc_size` | 512 | **1024** |
+| CNN | `base_filters` | 64 | **128** |
+| Transformer | `d_model` | 512 | **1024** |
+
+### Notes
+- **CNN `base_filters`** is capped at 128 (not 1024) because filters multiply across conv blocks: with `base_filters=128` and 5 conv blocks, the deepest block already reaches `128 * 2^4 = 2048` channels. Going higher would be impractical.
+- **Transformer `d_model=1024`** is divisible by all `nhead` choices (2, 4, 8), so no compatibility issue. The model also has a soft-correction in `models/transformer.py` that picks a compatible `nhead` if an invalid combination is ever proposed.
+- **No code changes needed in the models** — every architecture reads its size from `hp` dynamically (`hp["hidden_size"]`, `hp["d_model"]`, etc.) with no hard-coded ceiling. The 1024 support is purely a YAML `choices` widening.
+- The Analyzer is size-agnostic: it proposes `add_width` / `reduce_width`, and FTTS navigates the `choices` list step by step. A wider list just means more exploration room.

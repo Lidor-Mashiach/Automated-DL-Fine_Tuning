@@ -27,7 +27,7 @@ parameters:
   base_filters:
     enabled: true
     initial_value: 32
-    choices: [16, 32, 64]
+    choices: [16, 32, 64, 128]
 
   # kernel_size
   # -----------
@@ -51,7 +51,7 @@ parameters:
   fc_size:
     enabled: true
     initial_value: 256
-    choices: [128, 256, 512]
+    choices: [128, 256, 512, 1024]
 
   # activation
   # ----------
