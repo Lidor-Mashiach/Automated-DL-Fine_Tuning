@@ -198,26 +198,56 @@ T0024 attempt: T0016 + increase_sequence_length -> seq=512, lr=4.32e-3
 
 Both paths legitimately arrived at `{seq=512, lr=4.32e-3, ...}`. Evaluating it twice would waste a trial. This is **correct DAG behavior, not a bug** — the action `increase_sequence_length` did its job (256→512), it just happened to land on an already-visited node.
 
-### Why `increase_sequence_length` can *look* blocked
+### Stepped dedup recovery (`increase_X` / `decrease_X` actions)
 
-In a run where most trials get the `failed_to_learn` verdict, the analyzer keeps proposing both `increase_lr` (0.85) and `increase_sequence_length` (0.80). FTTS explores the seq_len axis fully: `128 → 256 → 512`. Once `seq_len=512` has been visited in combination with every reachable `lr` value, **any further `increase_sequence_length` necessarily lands on an already-seen node** and gets deduped. The log then shows repeated dedup messages for `increase_sequence_length`, which can look like it's "blocked" — but actually the entire reachable seq_len space was already covered. The remaining choices `{32, 64}` are *below* the initial value of 128 and are only reachable via `decrease_sequence_length`, which the `failed_to_learn` verdict doesn't emit (correctly — a model that won't learn shouldn't shrink its context).
+A naive dedup would *skip* a blocked action entirely. That created a real bug: if `increase_sequence_length` tried `128 → 256` and `256` was already explored via another path, FTTS gave up — so `sequence_length=512` and `1024` were **never reached**.
+
+The fix: when DAG-dedup blocks a **discrete stepped action** (one that walks an ordered `choices` list or an integer range), FTTS doesn't skip — it **steps further in the same direction** until it finds an unexplored value or hits the boundary:
+
+```
+increase_sequence_length from a seq=128 parent:
+  try 128 -> 256   ... already explored (dedup)
+  try 128 -> 512   ... already explored (dedup)
+  try 128 -> 1024  ... unexplored! -> use this
+```
+
+`decrease_X` does the same in the opposite direction (`512 → 256 → 128 → ...`). Only when **every** further step is also explored (or the boundary is hit) does FTTS genuinely skip the action.
+
+This applies to every discrete stepped action — see `_DISCRETE_STEP_ACTIONS` in `ftts.py`:
+
+| Action | Target param(s) | Direction |
+|---|---|---|
+| `add_width` / `reduce_width` | `hidden_size`, `d_model`, `fc_size`, `base_filters` | +1 / −1 |
+| `increase_sequence_length` / `decrease_sequence_length` | `sequence_length` | +1 / −1 |
+| `increase_batch_size` / `reduce_batch_size` | `batch_size` | +1 / −1 |
+| `increase_teacher_forcing` / `decrease_teacher_forcing` | `teacher_forcing_ratio` | +1 / −1 |
+| `add_depth` / `reduce_depth` | `num_layers`, `num_hidden_layers`, `num_encoder_layers`, `num_conv_blocks` | +1 / −1 |
+
+Continuous actions (`increase_lr`, `increase_dropout`, etc.) are **not** in this table — they move multiplicatively/additively and don't have a discrete "next choice", so they keep the simple skip-on-dedup behavior.
 
 ### Diagnostic logging
 
-Two log lines help diagnose dedup behavior:
+Three log lines help diagnose dedup behavior:
+
+```
+[ftts] dedup recovery: 'increase_sequence_length' from T0006 -
+       sequence_length:128->256 was already explored; stepped further to
+       sequence_length: 128 -> 512 (stepped past dedup).
+```
+The intended one-step move collided, and FTTS stepped further to an unexplored value. This is the **fix in action** — `seq_len=512` gets explored instead of skipped.
 
 ```
 [ftts] dedup: skipping 'increase_sequence_length' from T0016
        (target=sequence_length: 256 -> 512) - HP combination already
-       explored via another path.
+       explored and no further unexplored step exists.
 ```
-Shows the action, parent, and exactly which value the target param moved to. If you see `256 -> 512` repeatedly, FTTS *is* trying larger seq_len — the combination is just already covered.
+Every further step in that direction was *also* already explored (or the boundary was hit). Only now does FTTS genuinely skip.
 
 ```
 [ftts] action 'increase_sequence_length' from T0008 produced no change
        (target may be at YAML boundary). Trying next.
 ```
-Shows the action hit the end of the YAML `choices` list (e.g. `seq_len` already at its max of 512). `_adjust_choice_param` returns `None` in this case and FTTS moves on.
+The action hit the end of the YAML `choices` list (e.g. `seq_len` already at its max). `_adjust_choice_param` returns `None` and FTTS moves on.
 
 ### Value-coverage tracking
 
@@ -227,6 +257,8 @@ Shows the action hit the end of the YAML `choices` list (e.g. `seq_len` already 
 
 - `_hp_signature(hp)` — full-dict JSON signature
 - `_value_coverage_key(hp, target_param)` — `(param, value)` tuple for coverage tracking
+- `_try_further_discrete_step(parent_hp, action, seen)` — stepped dedup recovery: walks further along `choices`/range to find an unexplored value
+- `_DISCRETE_STEP_ACTIONS` — module-level map of which actions support stepping, and in which direction
 - `_seen_signatures: set[str]` — every visited/queued signature
 - `_value_coverage: dict[str, set]` — per-param visited values
 - All wired in `propose_next`

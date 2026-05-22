@@ -62,6 +62,32 @@ _DEFAULT_STEP_FACTORS = {
 }
 
 
+# =============================================================================
+# Discrete-step actions: actions whose target moves along an ordered list
+# (choices) or an integer range. When DAG-dedup blocks one of these, instead
+# of giving up we step further in the same direction (e.g. 128 -> 256 blocked,
+# try 128 -> 512, then 128 -> 1024) until we find an unexplored value or hit
+# the boundary.
+#
+# Maps action_type -> (candidate_param_names, direction).
+# direction: +1 = increase, -1 = decrease.
+# =============================================================================
+_DISCRETE_STEP_ACTIONS = {
+    "add_width":     (["hidden_size", "d_model", "fc_size", "base_filters"], +1),
+    "reduce_width":  (["hidden_size", "d_model", "fc_size", "base_filters"], -1),
+    "increase_sequence_length": (["sequence_length"], +1),
+    "decrease_sequence_length": (["sequence_length"], -1),
+    "increase_batch_size":      (["batch_size"], +1),
+    "reduce_batch_size":        (["batch_size"], -1),
+    "increase_teacher_forcing": (["teacher_forcing_ratio"], +1),
+    "decrease_teacher_forcing": (["teacher_forcing_ratio"], -1),
+    "add_depth":    (["num_hidden_layers", "num_layers",
+                       "num_encoder_layers", "num_conv_blocks"], +1),
+    "reduce_depth": (["num_hidden_layers", "num_layers",
+                       "num_encoder_layers", "num_conv_blocks"], -1),
+}
+
+
 class FTTS:
     """Fine-Tuning Tree Search strategy."""
 
@@ -175,15 +201,42 @@ class FTTS:
 
         # DAG-dedup: skip if this exact HP combination has been seen before.
         # This is correct DAG behavior - two paths converged to the same state.
-        # We print extra detail to help diagnose 'why was X blocked'.
         signature = self._hp_signature(child_hp)
         if signature in self._seen_signatures:
             tgt = action.target_param
             tgt_old = parent.hyperparameters.get(tgt) if tgt else None
             tgt_new = child_hp.get(tgt) if tgt else None
+
+            # Stepped recovery: for discrete actions (increase_X / decrease_X
+            # on a param with choices or an int range), don't just give up -
+            # try stepping FURTHER in the same direction. e.g. if 128 -> 256
+            # is taken, try 128 -> 512, then 128 -> 1024. This guarantees
+            # large values stay reachable instead of being permanently
+            # skipped because the intermediate step collided with another path.
+            stepped = self._try_further_discrete_step(
+                parent.hyperparameters, action, self._seen_signatures)
+            if stepped is not None:
+                child_hp, change_desc = stepped
+                signature = self._hp_signature(child_hp)
+                self._seen_signatures.add(signature)
+                print(f"[ftts] dedup recovery: '{action.type}' from "
+                      f"{parent_id} - {tgt}:{tgt_old}->{tgt_new} was already "
+                      f"explored; stepped further to {change_desc}.")
+                vk = self._value_coverage_key(child_hp, action.target_param)
+                if vk is not None:
+                    self._value_coverage.setdefault(vk[0], set()).add(vk[1])
+                rationale = (
+                    f"Based on {parent_id} (verdict={parent.verdict}, quality="
+                    f"{parent.quality_score:.3f}). Applied action "
+                    f"'{action.type}' [priority={action.priority:.2f}] with "
+                    f"dedup-stepping: {change_desc}"
+                )
+                return parent_id, child_hp, action, rationale
+
+            # No further step available - genuinely exhausted this direction.
             print(f"[ftts] dedup: skipping '{action.type}' from {parent_id} "
                   f"(target={tgt}: {tgt_old} -> {tgt_new}) - HP combination "
-                  f"already explored via another path.")
+                  f"already explored and no further unexplored step exists.")
             return self.propose_next()
         self._seen_signatures.add(signature)
 
@@ -543,6 +596,81 @@ class FTTS:
                 continue
             hp[name] = choices[new_idx]
             return f"{name}: {current} -> {hp[name]}"
+        return None
+
+    def _try_further_discrete_step(self, parent_hp: dict, action: Action,
+                                   seen: set) -> tuple[dict, str] | None:
+        """
+        DAG-dedup recovery for stepped (discrete) actions.
+
+        When a normal one-step move (e.g. sequence_length 128 -> 256) lands on
+        an already-explored HP signature, this tries progressively larger
+        steps in the SAME direction along the parameter's choices/range:
+            128 -> 256 (blocked) -> 128 -> 512 -> 128 -> 1024 ...
+        It returns the first (child_hp, change_description) whose signature is
+        unseen, or None if every further step is also seen or out of range.
+
+        This guarantees that high values like sequence_length=512/1024 are
+        actually reachable, instead of being permanently skipped because the
+        single intermediate step happened to collide with another DAG path.
+        """
+        spec = _DISCRETE_STEP_ACTIONS.get(action.type)
+        if spec is None:
+            return None
+        candidate_names, direction = spec
+
+        # Find the FIRST candidate param that is actually tunable on this arch
+        # and present in the parent hp. (e.g. for add_width on an LSTM, the
+        # relevant param is hidden_size; d_model/fc_size won't exist.)
+        for name in candidate_names:
+            p = self.cm.get_param(name)
+            if p is None:
+                continue
+            current = parent_hp.get(name)
+            if current is None:
+                continue
+
+            # Build the ordered list of values we can step to.
+            if p.get("choices"):
+                ordered = sorted(p["choices"])
+                try:
+                    idx = ordered.index(current)
+                except ValueError:
+                    # current not in choices - snap to nearest by value
+                    idx = min(range(len(ordered)),
+                              key=lambda i: abs(ordered[i] - current))
+                # Candidate target indices: every step further in `direction`.
+                step = 1
+                while True:
+                    next_idx = idx + direction * step
+                    if next_idx < 0 or next_idx >= len(ordered):
+                        break  # hit the boundary of the choices list
+                    candidate_hp = dict(parent_hp)
+                    candidate_hp[name] = ordered[next_idx]
+                    sig = self._hp_signature(candidate_hp)
+                    if sig not in seen:
+                        return candidate_hp, (f"{name}: {current} -> "
+                                               f"{ordered[next_idx]} "
+                                               f"(stepped past dedup)")
+                    step += 1
+                return None  # every further choice was also seen
+
+            elif p.get("range") is not None:
+                # Integer-range param (depth). Step by +/-1, +/-2, ...
+                lo, hi = p["range"]
+                step = 1
+                while True:
+                    next_val = int(current) + direction * step
+                    if next_val < int(lo) or next_val > int(hi):
+                        break
+                    candidate_hp = dict(parent_hp)
+                    candidate_hp[name] = next_val
+                    sig = self._hp_signature(candidate_hp)
+                    if sig not in seen:
+                        return candidate_hp, (f"{name}: {current} -> "
+                                               f"{next_val} (stepped past dedup)")
+                    step += 1
+                return None
         return None
 
     def _cycle_choice(self, hp: dict, name: str) -> str | None:

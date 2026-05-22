@@ -92,7 +92,7 @@ training:
   batch_size:
     enabled: true
     initial_value: 64
-    choices: [32, 64, 128, 256]
+    choices: [32, 64, 128]
 
   epochs:
     enabled: true
